@@ -1,0 +1,45 @@
+'use client';
+
+import { useEffect } from 'react';
+import { useNetlifyIdentity } from '@/hooks/use-netlify-identity';
+import { useStore } from '@/lib/store';
+import { Navbar } from './navbar';
+import { ExtractorView } from './extractor-view';
+import { RecipeBox } from './recipe-box';
+import { RecipeDetail } from './recipe-detail';
+import { Footer } from './footer';
+
+export function AppShell() {
+  const { user, token, isReady, login, signup, logout } = useNetlifyIdentity();
+  const { view, setAuthToken, fetchRecipes } = useStore();
+
+  // Sync the auth token to the store whenever it changes.
+  useEffect(() => {
+    setAuthToken(token);
+  }, [token, setAuthToken]);
+
+  // Fetch recipes when the user logs in.
+  useEffect(() => {
+    if (user) {
+      fetchRecipes();
+    }
+  }, [user, fetchRecipes]);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      <Navbar
+        user={user}
+        isReady={isReady}
+        onLogin={login}
+        onSignup={signup}
+        onLogout={logout}
+      />
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {view.name === 'extract' && <ExtractorView />}
+        {view.name === 'box' && <RecipeBox />}
+        {view.name === 'detail' && <RecipeDetail />}
+      </main>
+      <Footer />
+    </div>
+  );
+}

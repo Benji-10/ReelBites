@@ -1,0 +1,77 @@
+// This is the Prisma schema file for the Recipe Extractor app.
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Using PostgreSQL for Neon database.
+  // Set DATABASE_URL in your .env file (and Netlify env vars) to your Neon connection string.
+  // Example: postgresql://user:password@ep-xxx.region.aws.neon.tech/dbname?sslmode=require
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipes Recipe[]
+}
+
+model Recipe {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+
+  // JSON-encoded array of { name, amount, unit, notes?, evidence?, flag? }
+  ingredients Json
+
+  // JSON-encoded array of { step, evidence?, flag? }
+  instructions Json
+
+  // JSON-encoded array of { key, value, evidence?, flag? } for servings, prep time, cook time, etc.
+  metadata    Json
+
+  // JSON-encoded array of warning/flag objects produced by the LLM
+  // e.g. { type: "missing_amount", message: "Salt amount not specified", field: "ingredients[2]" }
+  flags       Json
+
+  // Raw source data kept for traceability
+  sourceUrl      String?
+  sourceCaption  String?
+  sourceComments String? // JSON-encoded array
+  transcript     String?
+  ocrText        String?
+
+  imageUrl    String?
+  sourceVideoUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ExtractionJob {
+  id        String   @id @default(cuid())
+  userId    String
+  status    String   @default("pending") // pending, processing, completed, failed
+  progress  Int      @default(0) // 0-100
+  step      String?  // current step description
+  error     String?
+  recipeId  String?  // created recipe ID on success
+  sourceUrl String?
+  logs      String?  // JSON-encoded array of { step, status, message, timestamp }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}

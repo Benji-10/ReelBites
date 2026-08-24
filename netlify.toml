@@ -1,0 +1,28 @@
+[build]
+  command = "bun run build"
+  publish = ".next"
+
+# Use the Netlify Next.js runtime (auto-installed, but pinning for reproducibility).
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[build.environment]
+  NEXT_USE_NETLIFY_GEOLAYOUT = "true"
+  NODE_VERSION = "20"
+
+# Long-running functions: the extraction pipeline can take 2-4 minutes for a
+# typical Instagram reel. Netlify's free tier supports background functions
+# up to 5 minutes, and synchronous functions up to 10 seconds on the free tier
+# (26 seconds on Pro). We set the function timeout to the maximum allowed.
+[functions]
+  node_bundler = "esbuild"
+  # On paid plans you can increase this to 900 (15 min).
+  # Free tier max for background functions is 300 (5 min).
+  timeout = 300
+
+# Next.js runtime configuration for the plugin.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+  [plugins.inputs]
+    # Needed for Prisma to work in serverless functions.
+    externalNodeModules = ["@prisma/client", ".prisma"]
