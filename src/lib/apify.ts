@@ -1,31 +1,31 @@
 /**
  * Apify integration for scraping Instagram reels.
  *
- * Uses the Apify Instagram scraper actor to fetch:
- *   - The direct video download URL
+ * Uses the `apify/instagram-reel-scraper` actor — a purpose-built first-party
+ * Apify actor that accepts direct reel URLs and returns:
+ *   - The direct video download URL (videoUrl)
  *   - The post caption
- *   - Pinned + top comments
+ *   - The latest 10 comments (latestComments, with text/author/likes/timestamp)
  *
- * The free Apify tier gives $5/month of credits (~10-25 Instagram scrapes
- * depending on the actor). The actor ID is configurable via the
- * APIFY_INSTAGRAM_ACTOR env var so users can swap to a cheaper/different actor.
+ * Free tier: ~$0.009 per reel (pay-per-event). The $5/month free credit
+ * covers roughly 550 reels/month.
  *
- * Different Apify Instagram actors return data with slightly different field
- * names (videoUrl, videoURL, video.url, mediaUrl, etc.). This module checks
- * all known field name variants so it works regardless of which actor you use.
+ * Actor input format:
+ *   { username: ["https://www.instagram.com/reel/SHORTCODE/"] }
+ *
+ * (Yes, the field is named `username` even though it accepts reel URLs —
+ *  the actor's input schema documents it as "Instagram username, profile URL,
+ *  ID, or reel URL".)
+ *
+ * The actor ID is configurable via the APIFY_INSTAGRAM_ACTOR env var if you
+ * want to switch to an alternative (e.g. `apify/instagram-post-scraper`,
+ * which uses the same input format and is slightly cheaper at ~$0.003/post).
  */
 
 import { ApifyClient } from 'apify-client';
 import type { InstagramComment, InstagramPost } from './types';
 
-// The default actor. This is Apify's official Instagram scraper and handles
-// all post types (reels, posts, stories, carousels). If it fails to return
-// video URLs, you can switch to an alternative actor via APIFY_INSTAGRAM_ACTOR.
-// Alternatives known to work:
-//   - apify/instagram-scraper          (default, Cheerio-based)
-//   - apify/instagram-api-scraper       (uses Instagram's private API)
-//   - kaitoeasyapi/instagram-reels-scraper (dedicated reels scraper)
-const DEFAULT_ACTOR_ID = 'apify/instagram-scraper';
+const DEFAULT_ACTOR_ID = 'apify/instagram-reel-scraper';
 
 /**
  * Extract a shortcode from any Instagram URL format.
@@ -67,111 +67,90 @@ function normalizeInstagramUrl(url: string): string {
   return url;
 }
 
+interface ApifyReelComment {
+  id?: string;
+  text?: string;
+  ownerUsername?: string;
+  timestamp?: string;
+  likesCount?: number;
+  pinnedByOwner?: boolean;
+  owner?: {
+    id?: string;
+    username?: string;
+    isVerified?: boolean;
+    fullName?: string;
+  };
+}
+
+interface ApifyReelResult {
+  // The Apify instagram-reel-scraper output schema:
+  inputUrl?: string;
+  id?: string;
+  type?: string; // "Reel" | "Video" | etc.
+  shortCode?: string;
+  caption?: string;
+  hashtags?: string[];
+  mentions?: unknown[];
+  url?: string;
+  commentsCount?: number;
+  firstComment?: string;
+  latestComments?: ApifyReelComment[];
+  comments?: ApifyReelComment[]; // some actor versions use this name
+  videoUrl?: string | null;
+  videoURL?: string | null;
+  video_url?: string | null;
+  videoDownloadUrl?: string | null;
+  displayUrl?: string | null;
+  videoDuration?: number;
+  likesCount?: number;
+  views?: number;
+  playCount?: number;
+  videoPlayCount?: number;
+  videoViewCount?: number;
+  timestamp?: string;
+  ownerUsername?: string;
+  owner?: {
+    id?: string;
+    username?: string;
+    isVerified?: boolean;
+    fullName?: string;
+  };
+  musicInfo?: unknown;
+  transcript?: string | null;
+  taggedUsers?: unknown[];
+  // Error fields (if the actor couldn't scrape the URL):
+  error?: string;
+  errorDescription?: string;
+}
+
 /**
  * Extract the video URL from an Apify result item.
- *
- * Different actors and actor versions use different field names. We check
- * all known variants to maximize compatibility:
- *   - videoUrl / videoURL / video_url
- *   - videoDownloadUrl / videoDownloadURL
- *   - mediaUrl / mediaURL
- *   - downloadUrl / downloadURL
- *   - video.url (nested object)
- *   - videoUrls[0] / videos[0].url (array fields)
+ * Checks multiple field name variants for cross-actor compatibility.
  */
-function extractVideoUrl(item: Record<string, unknown>): string | null {
-  // Check direct string fields (in order of likelihood).
+function extractVideoUrl(item: ApifyReelResult): string | null {
   const directFields = [
     'videoUrl',
     'videoURL',
     'video_url',
     'videoDownloadUrl',
-    'videoDownloadURL',
-    'mediaUrl',
-    'mediaURL',
-    'downloadUrl',
-    'downloadURL',
-    'videoLink',
-    'videoSrc',
-  ];
+  ] as const;
   for (const field of directFields) {
     const value = item[field];
     if (typeof value === 'string' && value.startsWith('http')) {
       return value;
     }
   }
-
-  // Check nested 'video' object.
-  const video = item.video as Record<string, unknown> | undefined;
-  if (video && typeof video === 'object' && video !== null) {
-    const videoUrl = video.url as string | undefined;
-    if (typeof videoUrl === 'string' && videoUrl.startsWith('http')) {
-      return videoUrl;
-    }
-    const videoDownloadUrl = video.downloadUrl as string | undefined;
-    if (typeof videoDownloadUrl === 'string' && videoDownloadUrl.startsWith('http')) {
-      return videoDownloadUrl;
-    }
-  }
-
-  // Check array fields.
-  const arrayFields = ['videoUrls', 'videoURLs', 'videos', 'video_urls'];
-  for (const field of arrayFields) {
-    const arr = item[field];
-    if (Array.isArray(arr) && arr.length > 0) {
-      const first = arr[0];
-      if (typeof first === 'string' && first.startsWith('http')) {
-        return first;
-      }
-      if (typeof first === 'object' && first !== null) {
-        const obj = first as Record<string, unknown>;
-        const objUrl = obj.url as string | undefined;
-        if (typeof objUrl === 'string' && objUrl.startsWith('http')) {
-          return objUrl;
-        }
-      }
-    }
-  }
-
   return null;
 }
 
 /**
- * Extract the thumbnail/cover image URL from an Apify result item.
+ * Extract the thumbnail/cover image URL.
  */
-function extractThumbnailUrl(item: Record<string, unknown>): string | null {
-  const fields = [
-    'thumbnailUrl',
-    'thumbnailURL',
-    'displayUrl',
-    'displayURL',
-    'imageUrl',
-    'imageURL',
-    'coverImageUrl',
-    'previewImageUrl',
-  ];
+function extractThumbnailUrl(item: ApifyReelResult): string | null {
+  const fields = ['displayUrl', 'thumbnailUrl', 'imageUrl'] as const;
   for (const field of fields) {
     const value = item[field];
     if (typeof value === 'string' && value.startsWith('http')) {
-      return value;
-    }
-  }
-  // Check the 'images' array.
-  const images = item.images as unknown[] | undefined;
-  if (Array.isArray(images) && images.length > 0 && typeof images[0] === 'string') {
-    return images[0] as string;
-  }
-  return null;
-}
-
-/**
- * Extract the caption from an Apify result item.
- */
-function extractCaption(item: Record<string, unknown>): string | null {
-  const fields = ['caption', 'text', 'description', 'textContent'];
-  for (const field of fields) {
-    const value = item[field];
-    if (typeof value === 'string' && value.trim().length > 0) {
       return value;
     }
   }
@@ -180,46 +159,22 @@ function extractCaption(item: Record<string, unknown>): string | null {
 
 /**
  * Extract and normalize comments from an Apify result item.
- * Handles different comment field name variants.
+ * The reel-scraper actor returns comments in `latestComments` (10 most recent).
  */
-function extractComments(item: Record<string, unknown>): InstagramComment[] {
-  const rawComments = (item.comments as Array<Record<string, unknown>>) || [];
+function extractComments(item: ApifyReelResult): InstagramComment[] {
+  const rawComments = item.latestComments || item.comments || [];
 
   return rawComments
     .map((c): InstagramComment => {
-      // Comment text can be in 'text', 'content', or 'comment' field.
-      const text =
-        (c.text as string) ||
-        (c.content as string) ||
-        (c.comment as string) ||
-        '';
-
-      // Author can be in 'ownerUsername', 'username', or 'owner.username'.
+      const text = (c.text || '').trim();
       const author =
-        (c.ownerUsername as string) ||
-        (c.username as string) ||
-        ((c.owner as Record<string, unknown>)?.username as string) ||
+        c.ownerUsername ||
+        c.owner?.username ||
         'unknown';
+      const likes = c.likesCount || 0;
+      const isPinned = c.pinnedByOwner === true;
 
-      // Likes can be in 'latestLikeCount', 'likeCount', or 'likesCount'.
-      const likes =
-        (c.latestLikeCount as number) ||
-        (c.likeCount as number) ||
-        (c.likesCount as number) ||
-        0;
-
-      // Pinned flag can be 'pinnedByOwner' or 'pinned' or 'isPinned'.
-      const isPinned =
-        c.pinnedByOwner === true ||
-        c.pinned === true ||
-        c.isPinned === true;
-
-      return {
-        text: text.trim(),
-        author,
-        likes,
-        isPinned,
-      };
+      return { text, author, likes, isPinned };
     })
     .filter((c) => c.text.length > 0);
 }
@@ -245,29 +200,24 @@ export async function scrapeInstagramPost(
   const actorId = process.env.APIFY_INSTAGRAM_ACTOR || DEFAULT_ACTOR_ID;
   const client = new ApifyClient({ token });
 
-  // Normalize the URL to a clean format (strips query params, normalizes /reels/ → /reel/).
+  // Normalize the URL (strip query params, normalize /reels/ → /reel/).
   const normalizedUrl = normalizeInstagramUrl(instagramUrl);
   const shortcode = extractShortcode(normalizedUrl);
 
   onProgress?.(`Calling Apify actor: ${actorId}`);
   onProgress?.(`Target: ${normalizedUrl}`);
 
-  // The Apify Instagram scraper accepts direct URLs in the `startUrls` input.
+  // The `apify/instagram-reel-scraper` actor accepts direct reel URLs in its
+  // `username` field (yes, it's named `username` even for reel URLs — the
+  // actor's input schema documents it as accepting "username, profile URL,
+  // ID, or reel URL"). The value must be an array of strings.
   //
-  // CRITICAL: We must explicitly set `searchType: "url"`. The actor's default
-  // is `searchType: "hashtag"`, which causes it to ignore reel/post URLs in
-  // startUrls entirely (the log shows "Starting the scraper with 0 direct
-  // URL(s)" and the dataset comes back empty).
+  // Alternative actors using the same input format:
+  //   - apify/instagram-post-scraper (slightly cheaper, ~$0.003/post)
   //
-  // Setting `searchType: "url"` tells the actor to treat each entry in
-  // startUrls as a direct Instagram URL (reel, post, profile, etc.) and
-  // scrape it directly.
-  const input: Record<string, unknown> = {
-    startUrls: [{ url: normalizedUrl, method: 'GET' as const }],
-    searchType: 'url',
-    resultsType: 'posts',
-    resultsLimit: 1,
-    scrapeCommentsFirst: true,
+  // If you switch actors, also update the env var APIFY_INSTAGRAM_ACTOR.
+  const input = {
+    username: [normalizedUrl],
   };
 
   // Call the actor and wait for it to finish. This typically takes 10-30 seconds.
@@ -291,22 +241,18 @@ export async function scrapeInstagramPost(
   if (!items || items.length === 0) {
     throw new Error(
       'Apify returned an empty dataset — the actor processed 0 URLs. ' +
-        'This usually means the actor did not recognize the URL as a direct post. ' +
-        'We set searchType="url" to fix this, but if you are using a custom actor ' +
-        '(via APIFY_INSTAGRAM_ACTOR), it may use a different input format. ' +
-        'Check the Apify run log at https://console.apify.com — look for a line ' +
-        'like "Starting the scraper with N direct URL(s)". If N is 0, the actor ' +
-        'is not picking up the URL.',
+        'This usually means the URL was rejected (private/deleted post) or ' +
+        'Instagram blocked the scrape. Check https://console.apify.com for details.',
     );
   }
 
-  const result = items[0] as Record<string, unknown>;
+  const result = items[0] as ApifyReelResult;
 
-  // If the actor returned an error object instead of post data, surface it.
+  // If the actor returned an error object, surface it directly.
   if (result.error && !extractVideoUrl(result)) {
     const errorDesc =
-      (result.errorDescription as string) ||
-      (result.error as string) ||
+      result.errorDescription ||
+      result.error ||
       'Unknown error';
     throw new Error(
       `Apify actor returned an error: ${errorDesc}. ` +
@@ -318,7 +264,7 @@ export async function scrapeInstagramPost(
   // Extract data using robust field detection.
   const videoUrl = extractVideoUrl(result);
   const thumbnailUrl = extractThumbnailUrl(result);
-  const caption = extractCaption(result);
+  const caption = result.caption || null;
   const comments = extractComments(result);
 
   // Sort comments: pinned first, then by likes descending.
@@ -347,13 +293,14 @@ export async function scrapeInstagramPost(
         `3. The actor version uses a different field name.\n\n` +
         `Solutions:\n` +
         `- Check the Apify run at https://console.apify.com to see the raw result.\n` +
-        `- Try setting APIFY_INSTAGRAM_ACTOR to a different actor (e.g. "apify/instagram-api-scraper" or "kaitoeasyapi/instagram-reels-scraper").\n` +
+        `- Try setting APIFY_INSTAGRAM_ACTOR to "apify/instagram-post-scraper" (uses the same input format).\n` +
         `- Make sure the URL points to a video reel, not an image post.`,
     );
   }
 
   onProgress?.(
-    `Found video from @${(result.ownerUsername as string) || 'unknown'}. Caption: ${caption?.slice(0, 80) || '(none)'}...`,
+    `Found video from @${result.ownerUsername || result.owner?.username || 'unknown'}. ` +
+      `Caption: ${caption?.slice(0, 80) || '(none)'}...`,
   );
 
   return {
@@ -361,8 +308,8 @@ export async function scrapeInstagramPost(
     caption,
     comments: topComments,
     thumbnailUrl,
-    author: (result.ownerUsername as string) || null,
-    postId: (result.id as string) || null,
-    shortCode: (result.shortCode as string) || shortcode,
+    author: result.ownerUsername || result.owner?.username || null,
+    postId: result.id || null,
+    shortCode: result.shortCode || shortcode,
   };
 }
