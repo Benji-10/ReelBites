@@ -253,12 +253,21 @@ export async function scrapeInstagramPost(
   onProgress?.(`Target: ${normalizedUrl}`);
 
   // The Apify Instagram scraper accepts direct URLs in the `startUrls` input.
-  // We request posts + comments.
+  //
+  // CRITICAL: We must explicitly set `searchType: "url"`. The actor's default
+  // is `searchType: "hashtag"`, which causes it to ignore reel/post URLs in
+  // startUrls entirely (the log shows "Starting the scraper with 0 direct
+  // URL(s)" and the dataset comes back empty).
+  //
+  // Setting `searchType: "url"` tells the actor to treat each entry in
+  // startUrls as a direct Instagram URL (reel, post, profile, etc.) and
+  // scrape it directly.
   const input: Record<string, unknown> = {
-    startUrls: [{ url: normalizedUrl }],
+    startUrls: [{ url: normalizedUrl, method: 'GET' as const }],
+    searchType: 'url',
     resultsType: 'posts',
     resultsLimit: 1,
-    scrapeCommentsFirst: 100,
+    scrapeCommentsFirst: true,
   };
 
   // Call the actor and wait for it to finish. This typically takes 10-30 seconds.
@@ -281,11 +290,30 @@ export async function scrapeInstagramPost(
   });
   if (!items || items.length === 0) {
     throw new Error(
-      'Apify returned no results. The Instagram URL may be private, deleted, or the actor failed to scrape it. Check your Apify dashboard for details.',
+      'Apify returned an empty dataset — the actor processed 0 URLs. ' +
+        'This usually means the actor did not recognize the URL as a direct post. ' +
+        'We set searchType="url" to fix this, but if you are using a custom actor ' +
+        '(via APIFY_INSTAGRAM_ACTOR), it may use a different input format. ' +
+        'Check the Apify run log at https://console.apify.com — look for a line ' +
+        'like "Starting the scraper with N direct URL(s)". If N is 0, the actor ' +
+        'is not picking up the URL.',
     );
   }
 
   const result = items[0] as Record<string, unknown>;
+
+  // If the actor returned an error object instead of post data, surface it.
+  if (result.error && !extractVideoUrl(result)) {
+    const errorDesc =
+      (result.errorDescription as string) ||
+      (result.error as string) ||
+      'Unknown error';
+    throw new Error(
+      `Apify actor returned an error: ${errorDesc}. ` +
+        'The reel may be private, deleted, or the actor was blocked by Instagram. ' +
+        'Check https://console.apify.com for details.',
+    );
+  }
 
   // Extract data using robust field detection.
   const videoUrl = extractVideoUrl(result);
