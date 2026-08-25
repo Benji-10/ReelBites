@@ -105,7 +105,18 @@ export async function runClientPipeline(
 
   if (!transcribeResponse.ok) {
     const errorData = await transcribeResponse.json().catch(() => ({ error: 'Transcription failed.' }));
-    throw new Error(errorData.error || `Transcription failed: HTTP ${transcribeResponse.status}`);
+    // Include debug info in the error message if available.
+    let errorMessage = errorData.error || `Transcription failed: HTTP ${transcribeResponse.status}`;
+    if (errorData.hint) {
+      errorMessage += `\n\nHint: ${errorData.hint}`;
+    }
+    if (errorData.debug && Array.isArray(errorData.debug)) {
+      const debugSummary = errorData.debug
+        .map((d: { step: string; message: string }) => `[${d.step}] ${d.message}`)
+        .join('\n');
+      errorMessage += `\n\nDebug log:\n${debugSummary}`;
+    }
+    throw new Error(errorMessage);
   }
 
   const { transcript } = (await transcribeResponse.json()) as { transcript: string };
