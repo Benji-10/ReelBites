@@ -107,7 +107,10 @@ export async function scrapeInstagramPost(
   onProgress?.('Fetching scraped dataset from Apify...');
 
   // Fetch the results from the actor's default dataset.
-  const { items } = await client.dataset(run.defaultDatasetId).list();
+  // NOTE: in apify-client v2.x the method is `listItems()`, not `list()`.
+  const { items } = await client.dataset(run.defaultDatasetId).listItems({
+    limit: 5,
+  });
   if (!items || items.length === 0) {
     throw new Error(
       'Apify returned no results. The Instagram URL may be private, deleted, or the actor failed to scrape it.',
