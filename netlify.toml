@@ -1,28 +1,41 @@
+# =============================================================================
+# Netlify Configuration for Reel Recipes
+# =============================================================================
+# Docs: https://docs.netlify.com/configure-builds/file-based-configuration/
+# =============================================================================
+
 [build]
   command = "bun run build"
   publish = ".next"
 
-# Use the Netlify Next.js runtime (auto-installed, but pinning for reproducibility).
-[[plugins]]
-  package = "@netlify/plugin-nextjs"
-
 [build.environment]
-  NEXT_USE_NETLIFY_GEOLAYOUT = "true"
   NODE_VERSION = "20"
+  # Prisma needs to generate its client during the build.
+  PRISMA_GENERATE_IN_POSTINSTALL = "true"
 
-# Long-running functions: the extraction pipeline can take 2-4 minutes for a
-# typical Instagram reel. Netlify's free tier supports background functions
-# up to 5 minutes, and synchronous functions up to 10 seconds on the free tier
-# (26 seconds on Pro). We set the function timeout to the maximum allowed.
+# -----------------------------------------------------------------------------
+# Netlify Functions configuration
+# -----------------------------------------------------------------------------
+# The extraction pipeline can take 2-4 minutes for a typical Instagram reel.
+# Netlify's free tier supports functions up to 10 seconds (synchronous) or
+# 5 minutes (background). We set the timeout to the free-tier max (300s).
+# On Netlify Pro you can increase this to 900 (15 min).
+# -----------------------------------------------------------------------------
 [functions]
   node_bundler = "esbuild"
-  # On paid plans you can increase this to 900 (15 min).
-  # Free tier max for background functions is 300 (5 min).
   timeout = 300
+  # Prisma must be treated as an external module by esbuild — otherwise the
+  # generated client (which lives in node_modules/.prisma) gets tree-shaken
+  # out and the functions crash at runtime with "PrismaClient not found".
+  external_node_modules = ["@prisma/client", ".prisma/client"]
 
-# Next.js runtime configuration for the plugin.
+# -----------------------------------------------------------------------------
+# Next.js Runtime Plugin
+# -----------------------------------------------------------------------------
+# This plugin is required for Next.js 16 on Netlify. It handles SSR, API
+# routes, image optimization, and the App Router.
+# It is installed as a devDependency in package.json (see "dependencies" there)
+# so Netlify can resolve it from the repo without hitting the network.
+# -----------------------------------------------------------------------------
 [[plugins]]
   package = "@netlify/plugin-nextjs"
-  [plugins.inputs]
-    # Needed for Prisma to work in serverless functions.
-    externalNodeModules = ["@prisma/client", ".prisma"]
