@@ -10,9 +10,12 @@ import { RecipeCard } from './recipe-card';
 export function RecipeBox() {
   const { recipes, fetchRecipes, setView, authToken } = useStore();
 
+  // Only fetch if we don't have recipes yet (avoids re-adding deleted recipes).
   useEffect(() => {
-    fetchRecipes();
-  }, [fetchRecipes, authToken]);
+    if (recipes.length === 0) {
+      fetchRecipes();
+    }
+  }, [authToken, recipes.length, fetchRecipes]);
 
   return (
     <div className="space-y-6">

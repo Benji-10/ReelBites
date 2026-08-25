@@ -235,22 +235,26 @@ export function RecipeDetail() {
 
   async function handleDelete() {
     if (!recipe) return;
-    try {
-      // Only try to delete from DB if it's a real recipe (not a temp ID).
-      if (!recipe.id.startsWith('temp-')) {
-        const response = await fetch(`/api/recipes/${recipe.id}`, {
+    const recipeId = recipe.id;
+    // Optimistically remove from local state FIRST, before the API call.
+    // This ensures the recipe disappears immediately even if the API is slow.
+    removeRecipe(recipeId);
+    toast.success('Recipe deleted.');
+    setView({ name: 'box' });
+
+    // Then delete from the DB in the background (don't block the UI).
+    if (!recipeId.startsWith('temp-')) {
+      try {
+        const response = await fetch(`/api/recipes/${recipeId}`, {
           method: 'DELETE',
           headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
         });
         if (!response.ok) {
-          console.warn('Delete from DB failed, removing from local state anyway');
+          console.warn('Delete from DB failed:', response.status);
         }
+      } catch (err) {
+        console.warn('Delete from DB failed:', err);
       }
-      removeRecipe(recipe.id);
-      toast.success('Recipe deleted.');
-      setView({ name: 'box' });
-    } catch (err) {
-      toast.error('Could not delete: ' + (err as Error).message);
     }
   }
 

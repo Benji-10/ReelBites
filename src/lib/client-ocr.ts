@@ -190,22 +190,31 @@ export async function ocrFrames(
   onProgress?.(`Running OCR on ${frames.length} frames (with preprocessing)...`);
 
   // Preprocess all frames first (grayscale + contrast + threshold).
+  const preprocessStart = performance.now();
   onProgress?.('Preprocessing frames for better OCR accuracy...');
   const processedFrames: { url: string; timestamp: number }[] = [];
 
   for (let i = 0; i < frames.length; i++) {
+    const frameStart = performance.now();
     try {
       const url = await preprocessFrameAsync(frames[i].data);
       processedFrames.push({ url, timestamp: frames[i].timestamp });
+      const frameTime = Math.round(performance.now() - frameStart);
+      console.log(`[OCR] Preprocessed frame ${i + 1}/${frames.length} in ${frameTime}ms`);
+      if (i === 0) {
+        onProgress?.(`Preprocessing frame ${i + 1}/${frames.length} (${frameTime}ms/frame)...`);
+      }
     } catch (err) {
       console.error(`Preprocessing failed for frame ${i}:`, err);
-      // Fall back to unprocessed.
       processedFrames.push({
         url: uint8ArrayToDataUrl(frames[i].data),
         timestamp: frames[i].timestamp,
       });
     }
   }
+  const preprocessTotal = Math.round(performance.now() - preprocessStart);
+  console.log(`[OCR] Preprocessing complete: ${processedFrames.length} frames in ${preprocessTotal}ms (${Math.round(preprocessTotal / processedFrames.length)}ms/frame avg)`);
+  onProgress?.(`Preprocessing done (${preprocessTotal}ms). Starting OCR...`);
 
   onProgress?.('Initializing Tesseract worker...');
 

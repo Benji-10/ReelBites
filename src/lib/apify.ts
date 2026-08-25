@@ -163,12 +163,19 @@ function extractThumbnailUrl(item: ApifyReelResult): string | null {
  *
  * Author comments (where the comment author matches the post author) are
  * prioritized — these often contain the full recipe written out by the creator.
- * The `firstComment` field is also checked, as Apify often returns it separately
- * and it's frequently the author's own pinned comment with the recipe.
+ *
+ * NOTE: `firstComment` is the TEXT of the first comment, NOT necessarily from
+ * the author. We only add it if it's not already in latestComments (to avoid
+ * duplicates). We do NOT assume it's from the author.
  */
 function extractComments(item: ApifyReelResult): InstagramComment[] {
   const rawComments = item.latestComments || item.comments || [];
   const postAuthor = item.ownerUsername || item.owner?.username;
+
+  // Log raw comment data for debugging.
+  console.log('[apify] Raw comments data:', JSON.stringify(rawComments, null, 2));
+  console.log('[apify] firstComment:', item.firstComment);
+  console.log('[apify] postAuthor:', postAuthor);
 
   const comments = rawComments
     .map((c): InstagramComment => {
@@ -186,16 +193,24 @@ function extractComments(item: ApifyReelResult): InstagramComment[] {
     })
     .filter((c) => c.text.length > 0);
 
-  // Also check the firstComment field — Apify sometimes returns it separately,
-  // and it's often the author's pinned comment with the full recipe.
+  // Check if firstComment is already in the list (to avoid duplicates).
   if (item.firstComment && typeof item.firstComment === 'string' && item.firstComment.trim()) {
-    comments.unshift({
-      text: item.firstComment.trim(),
-      author: postAuthor || 'unknown',
-      likes: 0,
-      isPinned: true,
-      isAuthor: true,
-    });
+    const firstCommentText = item.firstComment.trim();
+    const alreadyExists = comments.some((c) => c.text === firstCommentText);
+    if (!alreadyExists) {
+      // Don't assume firstComment is from the author — we don't know who made it.
+      // Try to find the author from the first entry in rawComments if available.
+      const firstRawComment = rawComments[0];
+      const firstAuthor = firstRawComment?.ownerUsername || firstRawComment?.owner?.username || 'unknown';
+      const isAuthor = postAuthor ? firstAuthor === postAuthor : false;
+      comments.unshift({
+        text: firstCommentText,
+        author: firstAuthor,
+        likes: firstRawComment?.likesCount || 0,
+        isPinned: firstRawComment?.pinnedByOwner === true,
+        isAuthor,
+      });
+    }
   }
 
   return comments;

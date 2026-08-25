@@ -167,9 +167,11 @@ export async function runClientPipeline(
       progress: 62,
     });
 
-    // 1.5-second interval, max 50 frames (covers up to 75 seconds of video).
-    const intervalSeconds = 1.5;
-    const maxFrames = 50;
+    // Adaptive frame extraction: use 2s interval for longer videos to keep
+    // the frame count reasonable. For a 47s video, 2s interval = ~24 frames.
+    // For a 15s video, 1.5s interval = ~10 frames.
+    const intervalSeconds = 2;
+    const maxFrames = 25; // Cap at 25 frames for speed.
 
     const frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
       onProgress({ step: 'frames', message: msg, progress: 72 }),

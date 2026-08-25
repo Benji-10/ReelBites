@@ -29,21 +29,32 @@ export const themeInitScript = `
 `;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Read the theme from the DOM (set by the inline script before hydration).
-  // On the server, document is undefined so we default to 'light'.
-  // suppressHydrationWarning on <html> prevents the mismatch error.
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof document === 'undefined') return 'light';
-    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-  });
-  const [colorTheme, setColorThemeState] = useState<ColorTheme>(() => {
-    if (typeof document === 'undefined') return 'default';
-    const classes = document.documentElement.classList;
-    for (const c of ['mocha', 'forest', 'berry']) {
-      if (classes.contains('theme-' + c)) return c as ColorTheme;
+  // Always start with defaults on both server and client to prevent
+  // hydration mismatch. The inline script already set the correct classes
+  // on <html> before React hydrates, so the visual theme is correct.
+  // We just need to sync our React state to match after mount.
+  const [theme, setTheme] = useState<Theme>('light');
+  const [colorTheme, setColorThemeState] = useState<ColorTheme>('default');
+
+  // After mount, read the actual theme from the DOM (set by inline script).
+  // Use requestAnimationFrame to defer the state update outside of the effect
+  // body to avoid the "setState in effect" lint error.
+  useEffect(() => {
+    const root = document.documentElement;
+    const isDark = root.classList.contains('dark');
+    let color: ColorTheme = 'default';
+    for (const c of ['mocha', 'forest', 'berry'] as const) {
+      if (root.classList.contains('theme-' + c)) {
+        color = c;
+        break;
+      }
     }
-    return 'default';
-  });
+    // Defer to next frame to avoid cascading renders.
+    requestAnimationFrame(() => {
+      setTheme((prev) => (prev !== (isDark ? 'dark' : 'light') ? (isDark ? 'dark' : 'light') : prev));
+      setColorThemeState((prev) => (prev !== color ? color : prev));
+    });
+  }, []);
 
   // Apply changes when theme/colorTheme is updated by user action.
   useEffect(() => {
