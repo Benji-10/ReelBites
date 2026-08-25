@@ -128,10 +128,6 @@ export async function runClientPipeline(
   });
 
   // Step 5: Extract video frames with ffmpeg.wasm (client-side).
-  // This is wrapped in try/catch because ffmpeg.wasm can crash with
-  // "memory access out of bounds" on some videos. If it fails, we
-  // continue without OCR — the recipe will still be generated from
-  // the caption and transcript.
   let ocrText = '';
   try {
     onProgress({
@@ -140,12 +136,12 @@ export async function runClientPipeline(
       progress: 62,
     });
 
-    // 1.5-second interval, max 20 frames (good balance of coverage vs speed).
+    // 1.5-second interval, max 50 frames (covers up to 75 seconds of video).
     const intervalSeconds = 1.5;
-    const maxFrames = 20;
+    const maxFrames = 50;
 
     const frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
-      onProgress({ step: 'frames', message: msg, progress: 75 }),
+      onProgress({ step: 'frames', message: msg, progress: 72 }),
     );
 
     // Step 6: Run OCR on frames (client-side Tesseract.js).
@@ -153,7 +149,7 @@ export async function runClientPipeline(
       onProgress({
         step: 'ocr',
         message: 'Running OCR on video frames...',
-        progress: 78,
+        progress: 75,
       });
 
       ocrText = await ocrFrames(frames, (msg) =>
@@ -167,10 +163,10 @@ export async function runClientPipeline(
       });
     }
   } catch (err) {
-    console.warn('[pipeline] Frame extraction/OCR failed, continuing without OCR:', err);
+    console.warn('[pipeline] Frame extraction/OCR failed:', err);
     onProgress({
       step: 'ocr',
-      message: `OCR skipped: ${(err as Error).message.slice(0, 80)}. Continuing with caption + transcript only.`,
+      message: `OCR skipped: ${(err as Error).message.slice(0, 80)}. Continuing with caption + transcript.`,
       progress: 85,
     });
   }

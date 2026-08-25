@@ -2,25 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  ArrowLeft,
-  Trash2,
-  Save,
-  X,
-  Plus,
-  Pencil,
-  ExternalLink,
-  ChefHat,
-  ListOrdered,
-  Clock,
-  Loader2,
-  Info,
+  ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
+  ChefHat, ListOrdered, Clock, Users, Minus, Maximize2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,8 +24,6 @@ import {
 import { useStore } from '@/lib/store';
 import { toast } from 'sonner';
 import type { SavedRecipe, RecipeIngredient, RecipeInstruction, RecipeMetadata } from '@/lib/types';
-import { EvidenceBadge } from './evidence-badge';
-import { FlagList } from './flag-list';
 
 export function RecipeDetail() {
   const { view, recipes, updateRecipe, removeRecipe, setView, authToken } = useStore();
@@ -46,10 +33,7 @@ export function RecipeDetail() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Edit state — which sections are being edited.
   const [editing, setEditing] = useState<Set<string>>(new Set());
-
-  // Editable copies of the data.
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
@@ -57,12 +41,16 @@ export function RecipeDetail() {
   const [editMetadata, setEditMetadata] = useState<RecipeMetadata[]>([]);
   const [editSourceUrl, setEditSourceUrl] = useState('');
 
-  // Load recipe from store or API.
+  // Checklist state — which ingredients are checked off.
+  const [checkedIngredients, setCheckedIngredients] = useState<Set<number>>(new Set());
+
+  // Recipe scaling state.
+  const [scaleFactor, setScaleFactor] = useState(1);
+
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
     setLoading(true);
 
-    // First check the store.
     const fromStore = recipes.find((r) => r.id === recipeId);
     if (fromStore) {
       setRecipe(fromStore);
@@ -76,7 +64,6 @@ export function RecipeDetail() {
       return;
     }
 
-    // Otherwise fetch from API.
     try {
       const response = await fetch(`/api/recipes/${recipeId}`, {
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
@@ -103,11 +90,34 @@ export function RecipeDetail() {
     loadRecipe();
   }, [loadRecipe]);
 
+  // Parse servings from metadata.
+  const servingsMeta = recipe?.metadata?.find((m) => m.key.toLowerCase() === 'servings');
+  const originalServings = servingsMeta ? parseInt(servingsMeta.value, 10) || 1 : 1;
+  const currentServings = Math.round(originalServings * scaleFactor);
+
+  function toggleIngredient(index: number) {
+    const next = new Set(checkedIngredients);
+    if (next.has(index)) {
+      next.delete(index);
+    } else {
+      next.add(index);
+    }
+    setCheckedIngredients(next);
+  }
+
+  function scaleAmount(amount: string | null | undefined): string {
+    if (!amount) return '';
+    const num = parseFloat(amount);
+    if (isNaN(num)) return amount;
+    const scaled = num * scaleFactor;
+    // Format nicely — avoid floating point issues.
+    return scaled % 1 === 0 ? scaled.toString() : scaled.toFixed(2).replace(/\.?0+$/, '');
+  }
+
   function toggleEdit(section: string) {
     const next = new Set(editing);
     if (next.has(section)) {
       next.delete(section);
-      // Reset the edit state for this section.
       if (recipe) {
         if (section === 'title') setEditTitle(recipe.title);
         if (section === 'description') setEditDescription(recipe.description || '');
@@ -161,11 +171,10 @@ export function RecipeDetail() {
   async function handleDelete() {
     if (!recipe) return;
     try {
-      const response = await fetch(`/api/recipes/${recipe.id}`, {
+      await fetch(`/api/recipes/${recipe.id}`, {
         method: 'DELETE',
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       });
-      if (!response.ok) throw new Error('Failed to delete.');
       removeRecipe(recipe.id);
       toast.success('Recipe deleted.');
       setView({ name: 'box' });
@@ -174,23 +183,18 @@ export function RecipeDetail() {
     }
   }
 
-  // Ingredient editing helpers.
   function updateIngredient(index: number, field: keyof RecipeIngredient, value: string) {
     const next = [...editIngredients];
     next[index] = { ...next[index], [field]: value || null };
     setEditIngredients(next);
   }
   function addIngredient() {
-    setEditIngredients([
-      ...editIngredients,
-      { name: '', amount: null, unit: null, notes: null, evidence: null, flag: null },
-    ]);
+    setEditIngredients([...editIngredients, { name: '', amount: null, unit: null, notes: null, evidence: null, flag: null }]);
   }
   function removeIngredient(index: number) {
     setEditIngredients(editIngredients.filter((_, i) => i !== index));
   }
 
-  // Instruction editing helpers.
   function updateInstruction(index: number, value: string) {
     const next = [...editInstructions];
     next[index] = { ...next[index], step: value };
@@ -203,7 +207,6 @@ export function RecipeDetail() {
     setEditInstructions(editInstructions.filter((_, i) => i !== index));
   }
 
-  // Metadata editing helpers.
   function updateMetadata(index: number, field: keyof RecipeMetadata, value: string) {
     const next = [...editMetadata];
     next[index] = { ...next[index], [field]: value || null };
@@ -219,7 +222,7 @@ export function RecipeDetail() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="animate-pulse text-muted-foreground">Loading recipe...</div>
       </div>
     );
   }
@@ -234,9 +237,9 @@ export function RecipeDetail() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="max-w-3xl mx-auto space-y-6">
       {/* Top bar */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between">
         <Button variant="ghost" size="sm" onClick={() => setView({ name: 'box' })} className="gap-1.5">
           <ArrowLeft className="h-4 w-4" />
           Back
@@ -245,15 +248,13 @@ export function RecipeDetail() {
           <AlertDialogTrigger asChild>
             <Button variant="ghost" size="sm" className="gap-1.5 text-destructive hover:text-destructive">
               <Trash2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Delete</span>
             </Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Delete this recipe?</AlertDialogTitle>
               <AlertDialogDescription>
-                This action cannot be undone. The recipe &ldquo;{recipe.title}&rdquo; will be
-                permanently removed from your recipe box.
+                This action cannot be undone. The recipe &ldquo;{recipe.title}&rdquo; will be permanently removed.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -270,140 +271,125 @@ export function RecipeDetail() {
       </div>
 
       {/* Title & Description */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 space-y-2">
-              {editing.has('title') ? (
-                <Input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="text-2xl font-bold h-auto py-2"
-                />
-              ) : (
-                <CardTitle className="text-2xl sm:text-3xl">{recipe.title}</CardTitle>
-              )}
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            {editing.has('title') ? (
+              <Input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="text-2xl font-bold h-auto py-2"
+              />
+            ) : (
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{recipe.title}</h1>
+            )}
+          </div>
+          <EditButton
+            isEditing={editing.has('title')}
+            onSave={() => saveSection('title')}
+            onCancel={() => toggleEdit('title')}
+            onEdit={() => toggleEdit('title')}
+            saving={saving}
+          />
+        </div>
+
+        {editing.has('description') ? (
+          <Textarea
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+            rows={2}
+            placeholder="Add a description..."
+          />
+        ) : (
+          recipe.description && (
+            <p className="text-muted-foreground leading-relaxed">{recipe.description}</p>
+          )
+        )}
+
+        {/* Metadata badges */}
+        {recipe.metadata && recipe.metadata.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {recipe.metadata.map((m, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs bg-muted rounded-full px-3 py-1">
+                {m.key.toLowerCase().includes('time') || m.key.toLowerCase().includes('prep') || m.key.toLowerCase().includes('cook') ? (
+                  <Clock className="h-3 w-3" />
+                ) : m.key.toLowerCase().includes('serving') ? (
+                  <Users className="h-3 w-3" />
+                ) : null}
+                <span className="font-medium capitalize">{m.key}:</span>
+                <span className="text-muted-foreground">{m.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Source link */}
+        {recipe.sourceUrl && (
+          <a
+            href={recipe.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            View original reel
+          </a>
+        )}
+      </div>
+
+      {/* Recipe Scaling */}
+      {originalServings > 1 && (
+        <Card>
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="text-xs">
-                  {recipe.ingredients?.length || 0} ingredients
-                </Badge>
-                <Badge variant="secondary" className="text-xs">
-                  {recipe.instructions?.length || 0} steps
-                </Badge>
-                {recipe.flags?.length > 0 && (
-                  <Badge variant="outline" className="text-xs text-amber-700 border-amber-300 bg-amber-50">
-                    {recipe.flags.length} flags
-                  </Badge>
+                <Users className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium">Servings</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setScaleFactor((f) => Math.max(0.5, f - 0.5))}
+                  disabled={scaleFactor <= 0.5}
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </Button>
+                <span className="font-semibold tabular-nums w-12 text-center">{currentServings}</span>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setScaleFactor((f) => f + 0.5)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                {scaleFactor !== 1 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setScaleFactor(1)}
+                  >
+                    Reset
+                  </Button>
                 )}
               </div>
             </div>
-            <EditButton
-              isEditing={editing.has('title')}
-              onSave={() => saveSection('title')}
-              onCancel={() => toggleEdit('title')}
-              onEdit={() => toggleEdit('title')}
-              saving={saving}
-            />
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Description */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-muted-foreground">Description</span>
-              <EditButton
-                isEditing={editing.has('description')}
-                onSave={() => saveSection('description')}
-                onCancel={() => toggleEdit('description')}
-                onEdit={() => toggleEdit('description')}
-                saving={saving}
-                small
-              />
-            </div>
-            {editing.has('description') ? (
-              <Textarea
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-                rows={3}
-                placeholder="Add a description..."
-              />
-            ) : (
-              <p className="text-sm text-foreground leading-relaxed">
-                {recipe.description || (
-                  <span className="text-muted-foreground italic">No description.</span>
-                )}
+            {scaleFactor !== 1 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Recipe scaled to {currentServings} servings (original: {originalServings})
               </p>
             )}
-          </div>
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Metadata */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
-                <Clock className="h-3.5 w-3.5" />
-                Details
-              </span>
-              <EditButton
-                isEditing={editing.has('metadata')}
-                onSave={() => saveSection('metadata')}
-                onCancel={() => toggleEdit('metadata')}
-                onEdit={() => toggleEdit('metadata')}
-                saving={saving}
-                small
-              />
-            </div>
-            {editing.has('metadata') ? (
-              <div className="space-y-2">
-                {editMetadata.map((m, i) => (
-                  <div key={i} className="flex gap-2 items-center">
-                    <Input
-                      value={m.key}
-                      onChange={(e) => updateMetadata(i, 'key', e.target.value)}
-                      placeholder="Key (e.g. servings)"
-                      className="flex-1 h-8 text-sm"
-                    />
-                    <Input
-                      value={m.value}
-                      onChange={(e) => updateMetadata(i, 'value', e.target.value)}
-                      placeholder="Value (e.g. 4)"
-                      className="flex-1 h-8 text-sm"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0"
-                      onClick={() => removeMetadata(i)}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ))}
-                <Button variant="outline" size="sm" onClick={addMetadata} className="gap-1.5">
-                  <Plus className="h-3.5 w-3.5" />
-                  Add detail
-                </Button>
-              </div>
-            ) : recipe.metadata?.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {recipe.metadata.map((m, i) => (
-                  <div key={i} className="flex items-center gap-1.5 text-sm bg-muted/50 rounded-md px-2.5 py-1">
-                    <span className="font-medium capitalize">{m.key}:</span>
-                    <span className="text-muted-foreground">{m.value}</span>
-                    <EvidenceBadge evidence={m.evidence} />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">No additional details.</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Ingredients */}
+      {/* Ingredients — Checklist */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-lg">
               <ChefHat className="h-5 w-5 text-primary" />
               Ingredients
@@ -421,11 +407,11 @@ export function RecipeDetail() {
           {editing.has('ingredients') ? (
             <div className="space-y-2">
               {editIngredients.map((ing, i) => (
-                <div key={i} className="flex flex-wrap gap-2 items-start p-2 rounded-md border border-border/60">
+                <div key={i} className="flex flex-wrap gap-2 items-center p-2 rounded-md border border-border/60">
                   <Input
                     value={ing.name}
                     onChange={(e) => updateIngredient(i, 'name', e.target.value)}
-                    placeholder="Ingredient name"
+                    placeholder="Ingredient"
                     className="flex-1 min-w-[120px] h-8 text-sm"
                   />
                   <Input
@@ -440,18 +426,7 @@ export function RecipeDetail() {
                     placeholder="Unit"
                     className="w-24 h-8 text-sm"
                   />
-                  <Input
-                    value={ing.notes || ''}
-                    onChange={(e) => updateIngredient(i, 'notes', e.target.value)}
-                    placeholder="Notes (optional)"
-                    className="flex-1 min-w-[120px] h-8 text-sm"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => removeIngredient(i)}
-                  >
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeIngredient(i)}>
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -462,32 +437,35 @@ export function RecipeDetail() {
               </Button>
             </div>
           ) : (
-            <ul className="space-y-2">
-              {recipe.ingredients?.map((ing, i) => (
-                <li key={i} className="flex items-start gap-3 group">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-semibold shrink-0 mt-0.5">
-                    {i + 1}
-                  </div>
-                  <div className="flex-1 space-y-0.5">
-                    <div className="flex items-baseline gap-2 flex-wrap">
+            <div className="space-y-1">
+              {recipe.ingredients?.map((ing, i) => {
+                const isChecked = checkedIngredients.has(i);
+                return (
+                  <label
+                    key={i}
+                    className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer group"
+                  >
+                    <Checkbox
+                      checked={isChecked}
+                      onCheckedChange={() => toggleIngredient(i)}
+                    />
+                    <span
+                      className={`flex-1 text-sm transition-all ${
+                        isChecked ? 'line-through text-muted-foreground' : ''
+                      }`}
+                    >
                       <span className="font-medium">{ing.name}</span>
                       {(ing.amount || ing.unit) && (
-                        <span className="text-sm text-muted-foreground">
-                          {ing.amount || '?'}
+                        <span className="text-muted-foreground ml-2">
+                          {scaleAmount(ing.amount)}
                           {ing.unit && ` ${ing.unit}`}
                         </span>
                       )}
-                      <EvidenceBadge evidence={ing.evidence} />
-                    </div>
-                    {ing.notes && (
-                      <p className="text-xs text-muted-foreground">{ing.notes}</p>
-                    )}
-                  </div>
-                </li>
-              )) || (
-                <li className="text-sm text-muted-foreground italic">No ingredients listed.</li>
-              )}
-            </ul>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -495,7 +473,7 @@ export function RecipeDetail() {
       {/* Instructions */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-lg">
               <ListOrdered className="h-5 w-5 text-primary" />
               Instructions
@@ -522,14 +500,8 @@ export function RecipeDetail() {
                     onChange={(e) => updateInstruction(i, e.target.value)}
                     rows={2}
                     className="flex-1 text-sm"
-                    placeholder="Describe this step..."
                   />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => removeInstruction(i)}
-                  >
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeInstruction(i)}>
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -546,91 +518,10 @@ export function RecipeDetail() {
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold shrink-0">
                     {i + 1}
                   </div>
-                  <div className="flex-1 space-y-1">
-                    <p className="text-sm leading-relaxed">{inst.step}</p>
-                    <EvidenceBadge evidence={inst.evidence} />
-                  </div>
+                  <p className="text-sm leading-relaxed pt-0.5">{inst.step}</p>
                 </li>
-              )) || (
-                <li className="text-sm text-muted-foreground italic">No instructions provided.</li>
-              )}
+              ))}
             </ol>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Source */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <ExternalLink className="h-5 w-5 text-primary" />
-              Source
-            </CardTitle>
-            <EditButton
-              isEditing={editing.has('source')}
-              onSave={() => saveSection('source')}
-              onCancel={() => toggleEdit('source')}
-              onEdit={() => toggleEdit('source')}
-              saving={saving}
-            />
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {editing.has('source') ? (
-            <Input
-              value={editSourceUrl}
-              onChange={(e) => setEditSourceUrl(e.target.value)}
-              placeholder="https://www.instagram.com/reel/..."
-            />
-          ) : recipe.sourceUrl ? (
-            <a
-              href={recipe.sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-sm text-primary hover:underline break-all"
-            >
-              {recipe.sourceUrl}
-              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-            </a>
-          ) : (
-            <p className="text-sm text-muted-foreground italic">No source URL.</p>
-          )}
-
-          {/* Show raw source data in a collapsible section */}
-          {(recipe.sourceCaption || recipe.transcript || recipe.ocrText) && (
-            <details className="mt-4 group">
-              <summary className="text-xs font-medium text-muted-foreground cursor-pointer hover:text-foreground flex items-center gap-1.5">
-                <Info className="h-3.5 w-3.5" />
-                View raw source data (caption, transcript, OCR)
-              </summary>
-              <div className="mt-3 space-y-3 text-xs">
-                {recipe.sourceCaption && (
-                  <div>
-                    <p className="font-semibold mb-1">Caption:</p>
-                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/30 p-2 rounded-md">
-                      {recipe.sourceCaption}
-                    </p>
-                  </div>
-                )}
-                {recipe.transcript && (
-                  <div>
-                    <p className="font-semibold mb-1">Audio Transcript:</p>
-                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/30 p-2 rounded-md">
-                      {recipe.transcript}
-                    </p>
-                  </div>
-                )}
-                {recipe.ocrText && (
-                  <div>
-                    <p className="font-semibold mb-1">OCR Text:</p>
-                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/30 p-2 rounded-md max-h-48 overflow-y-auto custom-scrollbar">
-                      {recipe.ocrText}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </details>
           )}
         </CardContent>
       </Card>
@@ -639,15 +530,25 @@ export function RecipeDetail() {
       {recipe.flags && recipe.flags.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Evidence &amp; Flags</CardTitle>
+            <CardTitle className="text-lg">Notes</CardTitle>
           </CardHeader>
           <CardContent>
-            <FlagList flags={recipe.flags} />
+            <ul className="space-y-2">
+              {recipe.flags.map((flag, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-amber-500 mt-0.5">•</span>
+                  <span className="text-muted-foreground">
+                    <span className="font-medium text-foreground capitalize">
+                      {flag.type.replace(/_/g, ' ')}:
+                    </span>{' '}
+                    {flag.message}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </CardContent>
         </Card>
       )}
-
-      <Separator />
     </div>
   );
 }
@@ -665,24 +566,12 @@ function EditButton({ isEditing, onSave, onCancel, onEdit, saving, small }: Edit
   if (isEditing) {
     return (
       <div className="flex gap-1.5 shrink-0">
-        <Button
-          size={small ? 'sm' : 'default'}
-          variant="ghost"
-          onClick={onCancel}
-          disabled={saving}
-          className="h-8"
-        >
+        <Button size={small ? 'sm' : 'default'} variant="ghost" onClick={onCancel} disabled={saving} className="h-8">
           <X className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Cancel</span>
         </Button>
-        <Button
-          size={small ? 'sm' : 'default'}
-          onClick={onSave}
-          disabled={saving}
-          className="h-8 gap-1.5"
-        >
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          <span className="hidden sm:inline">Save</span>
+        <Button size={small ? 'sm' : 'default'} onClick={onSave} disabled={saving} className="h-8 gap-1.5">
+          {saving ? <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <Save className="h-3.5 w-3.5" />}
+          Save
         </Button>
       </div>
     );
@@ -695,7 +584,7 @@ function EditButton({ isEditing, onSave, onCancel, onEdit, saving, small }: Edit
       className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
     >
       <Pencil className="h-3.5 w-3.5" />
-      <span className="hidden sm:inline">Edit</span>
+      Edit
     </Button>
   );
 }

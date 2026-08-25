@@ -5,18 +5,13 @@
  * a 76MB ffmpeg binary into the Netlify function (which would exceed the
  * 250MB function size limit).
  *
- * - Downloads the video from the Apify-provided URL
- * - Extracts the audio track (for Whisper STT)
- * - Extracts frames at a fixed interval (for OCR)
- *
  * CRITICAL: ffmpeg.wasm's writeFile() TRANSFERS the underlying ArrayBuffer
- * of any Uint8Array passed to it (via postMessage to the worker). This means
- * the SAME videoData CANNOT be used for both extractAudio AND extractFrames —
- * the second call will fail with "ArrayBuffer is detached". We must copy
- * the video data before each writeFile call.
+ * of any Uint8Array passed to it. We must copy data before each use.
  *
- * The ffmpeg.wasm core is loaded from a CDN on first use (~30MB, cached
- * by the browser for subsequent runs).
+ * MEMORY FIX: The ffmpeg.wasm instance can hit "memory access out of bounds"
+ * errors when processing large videos or doing multiple operations. To fix
+ * this, we terminate and reload the ffmpeg instance between major operations
+ * (audio extraction vs frame extraction) to reset the WASM heap.
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
@@ -37,11 +32,6 @@ function isDetached(data: Uint8Array): boolean {
 
 /**
  * Copy a Uint8Array into a fresh ArrayBuffer.
- *
- * This is necessary because ffmpeg.wasm's writeFile() transfers (detaches)
- * the underlying ArrayBuffer of any Uint8Array passed to it. If we want to
- * use the same data for multiple ffmpeg operations, we must pass a copy
- * each time.
  */
 function copyForFfmpeg(data: Uint8Array): Uint8Array {
   const copy = new Uint8Array(data.length);
@@ -54,20 +44,17 @@ function copyForFfmpeg(data: Uint8Array): Uint8Array {
  */
 async function getFfmpeg(onProgress?: (message: string) => void): Promise<FFmpeg> {
   if (ffmpegInstance && ffmpegInstance.loaded) {
-    onProgress?.('ffmpeg.wasm already loaded.');
     return ffmpegInstance;
   }
 
   if (loadPromise) {
-    onProgress?.('ffmpeg.wasm is loading...');
     return loadPromise;
   }
 
   loadPromise = (async () => {
-    onProgress?.('Creating ffmpeg.wasm instance...');
+    onProgress?.('Loading ffmpeg.wasm...');
     const ffmpeg = new FFmpeg();
 
-    // Listen for progress events.
     ffmpeg.on('progress', ({ progress }) => {
       const percent = Math.round(progress * 100);
       console.log(`[ffmpeg.wasm] Processing: ${percent}%`);
@@ -77,16 +64,12 @@ async function getFfmpeg(onProgress?: (message: string) => void): Promise<FFmpeg
       console.log(`[ffmpeg.wasm] ${message}`);
     });
 
-    onProgress?.('Downloading ffmpeg.wasm core from CDN (~30MB, cached after)...');
     const coreURL = await toBlobURL(FFMPEG_CORE_URL, 'text/javascript');
-    onProgress?.('Downloading ffmpeg.wasm WASM binary...');
     const wasmURL = await toBlobURL(FFMPEG_WASM_URL, 'application/wasm');
 
-    onProgress?.('Loading ffmpeg.wasm...');
     await ffmpeg.load({ coreURL, wasmURL });
 
     ffmpegInstance = ffmpeg;
-    onProgress?.('ffmpeg.wasm loaded successfully.');
     return ffmpeg;
   })();
 
@@ -94,11 +77,28 @@ async function getFfmpeg(onProgress?: (message: string) => void): Promise<FFmpeg
 }
 
 /**
+ * Terminate the ffmpeg instance and force a reload on next use.
+ *
+ * This is the key fix for "memory access out of bounds" errors — by
+ * terminating and reloading the WASM instance between operations, we
+ * reset the WASM heap and avoid memory fragmentation.
+ */
+async function resetFfmpeg(): Promise<void> {
+  if (ffmpegInstance) {
+    try {
+      ffmpegInstance.terminate();
+    } catch {
+      // Best-effort.
+    }
+    ffmpegInstance = null;
+    loadPromise = null;
+  }
+}
+
+/**
  * Download a video URL and return it as a Uint8Array.
  *
- * Handles 302 redirects (common with Instagram CDN URLs) by following
- * them automatically. The fetch API follows redirects by default, but
- * we add retry logic for transient network errors.
+ * Handles 302 redirects and retries on network errors.
  */
 export async function downloadVideo(
   videoUrl: string,
@@ -108,13 +108,16 @@ export async function downloadVideo(
 
   let lastError: Error | null = null;
 
-  // Try up to 3 times — Instagram CDN can be flaky.
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
-      onProgress?.(`Downloading video (attempt ${attempt}/3)...`);
+      if (attempt > 1) {
+        const waitMs = 2000 * attempt;
+        onProgress?.(`Retry ${attempt}/5 in ${waitMs / 1000}s...`);
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
 
       const response = await fetch(videoUrl, {
-        redirect: 'follow', // Follow 302 redirects automatically.
+        redirect: 'follow',
       });
 
       if (!response.ok) {
@@ -151,7 +154,6 @@ export async function downloadVideo(
         }
       }
 
-      // Merge all chunks into a single Uint8Array.
       const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
       const result = new Uint8Array(totalLength);
       let offset = 0;
@@ -160,29 +162,25 @@ export async function downloadVideo(
         offset += chunk.length;
       }
 
-      onProgress?.(`Video downloaded: ${(totalLength / 1024 / 1024).toFixed(1)} MB (${totalLength} bytes)`);
+      onProgress?.(`Video downloaded: ${(totalLength / 1024 / 1024).toFixed(1)} MB`);
       return result;
     } catch (err) {
       lastError = err as Error;
       console.error(`[downloadVideo] Attempt ${attempt} failed:`, lastError.message);
-      if (attempt < 3) {
-        onProgress?.(`Download failed (attempt ${attempt}), retrying...`);
-        await new Promise((r) => setTimeout(r, 2000 * attempt));
-      }
     }
   }
 
   throw new Error(
-    `Failed to download video after 3 attempts. Last error: ${lastError?.message}. ` +
-      'The Instagram CDN URL may have expired or be rate-limiting you.',
+    `Failed to download video after 5 attempts. Last error: ${lastError?.message}. ` +
+      'The Instagram CDN URL may have expired. Try extracting again to get a fresh URL.',
   );
 }
 
 /**
  * Extract the audio track from a video using ffmpeg.wasm.
  *
- * @param videoData - The video file as a Uint8Array (will be copied internally)
- * @returns The audio as a base64-encoded MP3 string (for upload to server)
+ * After extraction, the ffmpeg instance is terminated to free WASM memory
+ * before the frame extraction step.
  */
 export async function extractAudio(
   videoData: Uint8Array,
@@ -193,103 +191,54 @@ export async function extractAudio(
     isDetached: isDetached(videoData),
   });
 
-  onProgress?.('Loading ffmpeg.wasm (first run downloads ~30MB, cached after)...');
+  onProgress?.('Loading ffmpeg.wasm (first run downloads ~30MB)...');
   const ffmpeg = await getFfmpeg(onProgress);
 
-  // CRITICAL: Copy the video data before passing to ffmpeg.writeFile.
-  // ffmpeg.writeFile transfers the ArrayBuffer to the worker, detaching it.
-  // The original videoData must remain usable for extractFrames.
   const videoCopy = copyForFfmpeg(videoData);
-  console.log('[extractAudio] Copied video data for ffmpeg', {
-    originalDetached: isDetached(videoData),
-    copyDetached: isDetached(videoCopy),
-    copyLength: videoCopy.length,
-  });
 
-  onProgress?.('Writing video file to ffmpeg virtual FS...');
-  try {
-    await ffmpeg.writeFile('input.mp4', videoCopy);
-    console.log('[extractAudio] writeFile succeeded');
-  } catch (err) {
-    console.error('[extractAudio] writeFile failed:', err);
-    throw new Error(`ffmpeg.writeFile failed: ${(err as Error).message}`);
-  }
+  onProgress?.('Writing video to ffmpeg...');
+  await ffmpeg.writeFile('input.mp4', videoCopy);
 
-  onProgress?.('Extracting audio track (16kHz mono MP3)...');
-
-  // Reset the ffmpeg instance if it's in a bad state from a previous run.
-  // The "Unrecognized option 'y'" error happens when the WASM core crashes
-  // and leaves the ffmpeg instance in an inconsistent state.
+  onProgress?.('Extracting audio (16kHz mono MP3)...');
   try {
     await ffmpeg.exec([
       '-i', 'input.mp4',
-      '-vn', // no video
+      '-vn',
       '-acodec', 'libmp3lame',
-      '-ar', '16000', // 16kHz sample rate (Whisper)
-      '-ac', '1', // mono
+      '-ar', '16000',
+      '-ac', '1',
       '-b:a', '32k',
       'output.mp3',
     ]);
-    console.log('[extractAudio] exec succeeded');
   } catch (err) {
     console.error('[extractAudio] exec failed:', err);
-    // Check if the output file exists anyway (ffmpeg sometimes "fails" but
-    // still produces output).
-    let hasOutput = false;
+    // Check if output exists despite error.
     try {
       const data = await ffmpeg.readFile('output.mp3');
-      if (data && (data as Uint8Array).length > 0) {
-        hasOutput = true;
-        console.log('[extractAudio] Output exists despite error, continuing');
-        const rawAudio = data as Uint8Array;
-        const audioBytes = new Uint8Array(rawAudio.length);
-        audioBytes.set(rawAudio);
-
-        // Clean up.
-        try {
-          await ffmpeg.deleteFile('input.mp4');
-          await ffmpeg.deleteFile('output.mp3');
-        } catch {}
-
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < audioBytes.length; i += chunkSize) {
-          const chunk = audioBytes.subarray(i, i + chunkSize);
-          binary += String.fromCharCode(...chunk);
-        }
-        const audioBase64 = btoa(binary);
-        onProgress?.(`Audio extracted: ${(audioBytes.length / 1024).toFixed(1)} KB`);
-        return { audioBase64, audioSize: audioBytes.length };
+      if (!data || (data as Uint8Array).length === 0) {
+        throw err;
       }
+      console.log('[extractAudio] Output exists despite error');
     } catch {
-      // No output.
-    }
-
-    if (!hasOutput) {
-      throw new Error(`ffmpeg.exec (audio) failed: ${(err as Error).message}`);
+      throw new Error(`ffmpeg audio extraction failed: ${(err as Error).message}`);
     }
   }
 
   onProgress?.('Reading extracted audio...');
   const audioData = await ffmpeg.readFile('output.mp3');
-  console.log('[extractAudio] readFile succeeded', {
-    audioLength: (audioData as Uint8Array).length,
-  });
 
   // Clean up virtual FS.
   try {
     await ffmpeg.deleteFile('input.mp4');
     await ffmpeg.deleteFile('output.mp3');
-  } catch {
-    // Best-effort cleanup.
-  }
+  } catch {}
 
-  // Copy the audio data out of the WASM heap.
+  // Copy data out of WASM heap.
   const rawAudio = audioData as Uint8Array;
   const audioBytes = new Uint8Array(rawAudio.length);
   audioBytes.set(rawAudio);
 
-  // Convert to base64 for upload.
+  // Convert to base64.
   let binary = '';
   const chunkSize = 8192;
   for (let i = 0; i < audioBytes.length; i += chunkSize) {
@@ -299,10 +248,10 @@ export async function extractAudio(
   const audioBase64 = btoa(binary);
 
   onProgress?.(`Audio extracted: ${(audioBytes.length / 1024).toFixed(1)} KB`);
-  console.log('[extractAudio] Complete', {
-    audioSize: audioBytes.length,
-    base64Length: audioBase64.length,
-  });
+
+  // CRITICAL: Terminate ffmpeg to free WASM memory before frame extraction.
+  // This prevents "memory access out of bounds" errors.
+  await resetFfmpeg();
 
   return { audioBase64, audioSize: audioBytes.length };
 }
@@ -310,15 +259,17 @@ export async function extractAudio(
 /**
  * Extract frames from a video at a fixed interval using ffmpeg.wasm.
  *
+ * The ffmpeg instance is freshly loaded (the previous one was terminated
+ * after audio extraction) to ensure clean WASM memory.
+ *
  * @param videoData - The video file as a Uint8Array (will be copied internally)
  * @param intervalSeconds - Seconds between frames (default: 1.5)
- * @param maxFrames - Maximum number of frames to extract (default: 20)
- * @returns Array of { data: Uint8Array, timestamp: number }
+ * @param maxFrames - Maximum number of frames to extract (default: 50)
  */
 export async function extractFrames(
   videoData: Uint8Array,
   intervalSeconds: number = 1.5,
-  maxFrames: number = 20,
+  maxFrames: number = 50,
   onProgress?: (message: string) => void,
 ): Promise<{ data: Uint8Array; timestamp: number }[]> {
   console.log('[extractFrames] Starting', {
@@ -328,62 +279,34 @@ export async function extractFrames(
     maxFrames,
   });
 
-  // CRITICAL CHECK: If the video data is already detached, we can't proceed.
   if (isDetached(videoData)) {
-    const error = new Error(
-      'videoData buffer is detached — it was already transferred to a worker. ' +
-        'This means extractAudio() consumed the buffer before extractFrames() was called. ' +
-        'The pipeline must copy the video data before each use.',
-    );
-    console.error('[extractFrames]', error.message);
-    throw error;
+    throw new Error('videoData buffer is detached — pipeline error.');
   }
 
-  onProgress?.('Loading ffmpeg.wasm...');
+  // Load a fresh ffmpeg instance (previous one was terminated after audio).
+  onProgress?.('Loading ffmpeg.wasm for frame extraction...');
   const ffmpeg = await getFfmpeg(onProgress);
 
-  // CRITICAL: Copy the video data before passing to ffmpeg.writeFile.
   const videoCopy = copyForFfmpeg(videoData);
-  console.log('[extractFrames] Copied video data for ffmpeg', {
-    copyLength: videoCopy.length,
-    copyDetached: isDetached(videoCopy),
-  });
 
-  onProgress?.('Writing video file to ffmpeg virtual FS...');
-  try {
-    await ffmpeg.writeFile('input.mp4', videoCopy);
-    console.log('[extractFrames] writeFile succeeded');
-  } catch (err) {
-    console.error('[extractFrames] writeFile failed:', err);
-    throw new Error(`ffmpeg.writeFile failed: ${(err as Error).message}`);
-  }
+  onProgress?.('Writing video to ffmpeg...');
+  await ffmpeg.writeFile('input.mp4', videoCopy);
 
-  onProgress?.(`Extracting up to ${maxFrames} frames (every ${intervalSeconds}s, resized to 640px)...`);
+  onProgress?.(`Extracting up to ${maxFrames} frames (every ${intervalSeconds}s)...`);
 
-  // Track the last progress message so we can show frame-by-frame updates.
   let lastProgressPercent = -1;
   const progressHandler = ({ progress }: { progress: number }) => {
     const percent = Math.round(progress * 100);
-    // Only log when percent changes, and cap at 99% (we'll set 100% when done).
     if (percent !== lastProgressPercent && percent < 100) {
       lastProgressPercent = percent;
-      // Estimate how many frames have been extracted based on progress.
-      const estimatedFrames = Math.min(
-        maxFrames,
-        Math.ceil((percent / 100) * maxFrames),
-      );
-      onProgress?.(
-        `Extracting frames... ${percent}% (~${estimatedFrames}/${maxFrames} frames)`,
-      );
+      const estimatedFrames = Math.min(maxFrames, Math.ceil((percent / 100) * maxFrames));
+      onProgress?.(`Extracting frames... ${percent}% (~${estimatedFrames}/${maxFrames})`);
     }
   };
 
   ffmpeg.on('progress', progressHandler);
 
   try {
-    // Use scale filter to resize frames to 640px wide (preserves aspect ratio).
-    // This dramatically reduces processing time and file size.
-    // Quality set to 5 (low) — OCR only needs text contrast, not high-res.
     await ffmpeg.exec([
       '-i', 'input.mp4',
       '-vf', `fps=1/${intervalSeconds},scale=640:-1`,
@@ -391,18 +314,14 @@ export async function extractFrames(
       '-q:v', '5',
       'frame_%04d.jpg',
     ]);
-    console.log('[extractFrames] exec succeeded');
   } catch (err) {
     console.error('[extractFrames] exec failed:', err);
-    ffmpeg.off('progress', progressHandler);
-    // Don't throw immediately — ffmpeg may have partially succeeded.
-    // We'll check what frames were actually created and use those.
     onProgress?.('Frame extraction had errors, checking partial results...');
   }
 
   ffmpeg.off('progress', progressHandler);
 
-  // Read all generated frames (may be partial if exec failed).
+  // Read all generated frames (may be partial).
   onProgress?.('Reading extracted frames...');
   const frames: { data: Uint8Array; timestamp: number }[] = [];
   for (let i = 1; i <= maxFrames; i++) {
@@ -411,32 +330,27 @@ export async function extractFrames(
       const data = await ffmpeg.readFile(filename);
       if (data && (data as Uint8Array).length > 0) {
         const rawData = data as Uint8Array;
-        // Copy the data out of the WASM heap into a fresh ArrayBuffer.
         const copy = new Uint8Array(rawData.length);
         copy.set(rawData);
         frames.push({
           data: copy,
           timestamp: (i - 1) * intervalSeconds,
         });
-        console.log(`[extractFrames] Read frame ${i}: ${rawData.length} bytes`);
       }
-      // Clean up.
       await ffmpeg.deleteFile(filename);
     } catch {
-      console.log(`[extractFrames] Frame ${i} not found (video may be shorter)`);
       break;
     }
   }
 
-  // Clean up.
   try {
     await ffmpeg.deleteFile('input.mp4');
-  } catch {
-    // Best-effort.
-  }
+  } catch {}
 
   onProgress?.(`Extracted ${frames.length} frames.`);
-  console.log('[extractFrames] Complete', { frameCount: frames.length });
+
+  // Terminate to free memory.
+  await resetFfmpeg();
 
   return frames;
 }

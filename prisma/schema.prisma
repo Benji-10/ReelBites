@@ -47,7 +47,7 @@ model Recipe {
   // Raw source data kept for traceability
   sourceUrl      String?
   sourceCaption  String?
-  sourceComments String? // JSON-encoded array
+  sourceComments Json?    // JSON-encoded array of comments
   transcript     String?
   ocrText        String?
 

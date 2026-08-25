@@ -43,9 +43,9 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Warm, food-inspired palette (amber/tomato/herb) */
+/* Light theme — warm, food-inspired palette */
 :root {
-  --radius: 0.625rem;
+  --radius: 0.75rem;
   --background: oklch(0.99 0.005 80);
   --foreground: oklch(0.20 0.02 50);
   --card: oklch(1 0 0);
@@ -79,38 +79,129 @@
   --sidebar-ring: oklch(0.68 0.19 45);
 }
 
+/* Dark theme — warm dark with amber accents */
 .dark {
-  --background: oklch(0.16 0.01 50);
-  --foreground: oklch(0.96 0.01 80);
-  --card: oklch(0.20 0.015 50);
-  --card-foreground: oklch(0.96 0.01 80);
-  --popover: oklch(0.20 0.015 50);
-  --popover-foreground: oklch(0.96 0.01 80);
+  --background: oklch(0.15 0.008 50);
+  --foreground: oklch(0.95 0.008 80);
+  --card: oklch(0.19 0.01 50);
+  --card-foreground: oklch(0.95 0.008 80);
+  --popover: oklch(0.19 0.01 50);
+  --popover-foreground: oklch(0.95 0.008 80);
   --primary: oklch(0.72 0.18 45);
-  --primary-foreground: oklch(0.16 0.01 50);
-  --secondary: oklch(0.26 0.02 50);
-  --secondary-foreground: oklch(0.96 0.01 80);
-  --muted: oklch(0.26 0.02 50);
-  --muted-foreground: oklch(0.70 0.03 60);
+  --primary-foreground: oklch(0.15 0.008 50);
+  --secondary: oklch(0.25 0.015 50);
+  --secondary-foreground: oklch(0.95 0.008 80);
+  --muted: oklch(0.25 0.015 50);
+  --muted-foreground: oklch(0.68 0.03 60);
   --accent: oklch(0.30 0.04 50);
-  --accent-foreground: oklch(0.96 0.01 80);
+  --accent-foreground: oklch(0.95 0.008 80);
   --destructive: oklch(0.70 0.19 22);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.72 0.18 45);
   --chart-1: oklch(0.72 0.18 45);
   --chart-2: oklch(0.70 0.15 145);
   --chart-3: oklch(0.65 0.13 250);
   --chart-4: oklch(0.82 0.16 85);
   --chart-5: oklch(0.72 0.20 15);
-  --sidebar: oklch(0.20 0.015 50);
-  --sidebar-foreground: oklch(0.96 0.01 80);
+  --sidebar: oklch(0.19 0.01 50);
+  --sidebar-foreground: oklch(0.95 0.008 80);
   --sidebar-primary: oklch(0.72 0.18 45);
-  --sidebar-primary-foreground: oklch(0.16 0.01 50);
+  --sidebar-primary-foreground: oklch(0.15 0.008 50);
   --sidebar-accent: oklch(0.30 0.04 50);
-  --sidebar-accent-foreground: oklch(0.96 0.01 80);
+  --sidebar-accent-foreground: oklch(0.95 0.008 80);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.72 0.18 45);
+}
+
+/* "Mocha" theme — warm coffee tones */
+.theme-mocha {
+  --background: oklch(0.97 0.01 40);
+  --foreground: oklch(0.25 0.02 30);
+  --card: oklch(0.99 0.008 40);
+  --primary: oklch(0.50 0.08 30);
+  --primary-foreground: oklch(0.97 0.01 40);
+  --secondary: oklch(0.92 0.02 40);
+  --muted: oklch(0.92 0.015 40);
+  --muted-foreground: oklch(0.45 0.03 35);
+  --accent: oklch(0.88 0.03 40);
+  --border: oklch(0.88 0.02 40);
+  --ring: oklch(0.50 0.08 30);
+}
+
+.theme-mocha.dark {
+  --background: oklch(0.18 0.012 35);
+  --foreground: oklch(0.92 0.01 40);
+  --card: oklch(0.22 0.015 35);
+  --primary: oklch(0.65 0.1 35);
+  --primary-foreground: oklch(0.18 0.012 35);
+  --secondary: oklch(0.28 0.02 35);
+  --muted: oklch(0.28 0.015 35);
+  --muted-foreground: oklch(0.65 0.02 40);
+  --accent: oklch(0.32 0.025 35);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.65 0.1 35);
+}
+
+/* "Forest" theme — green/herb tones */
+.theme-forest {
+  --background: oklch(0.98 0.008 145);
+  --foreground: oklch(0.22 0.02 150);
+  --card: oklch(1 0 0);
+  --primary: oklch(0.55 0.12 150);
+  --primary-foreground: oklch(0.98 0.008 145);
+  --secondary: oklch(0.94 0.02 145);
+  --muted: oklch(0.94 0.015 145);
+  --muted-foreground: oklch(0.48 0.03 150);
+  --accent: oklch(0.90 0.04 145);
+  --border: oklch(0.88 0.02 145);
+  --ring: oklch(0.55 0.12 150);
+}
+
+.theme-forest.dark {
+  --background: oklch(0.16 0.012 150);
+  --foreground: oklch(0.93 0.01 145);
+  --card: oklch(0.20 0.015 150);
+  --primary: oklch(0.68 0.13 150);
+  --primary-foreground: oklch(0.16 0.012 150);
+  --secondary: oklch(0.26 0.02 150);
+  --muted: oklch(0.26 0.015 150);
+  --muted-foreground: oklch(0.66 0.02 145);
+  --accent: oklch(0.30 0.03 150);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.68 0.13 150);
+}
+
+/* "Berry" theme — purple/berry tones */
+.theme-berry {
+  --background: oklch(0.98 0.008 330);
+  --foreground: oklch(0.22 0.02 330);
+  --card: oklch(1 0 0);
+  --primary: oklch(0.55 0.15 340);
+  --primary-foreground: oklch(0.98 0.008 330);
+  --secondary: oklch(0.94 0.02 330);
+  --muted: oklch(0.94 0.015 330);
+  --muted-foreground: oklch(0.48 0.03 330);
+  --accent: oklch(0.90 0.04 340);
+  --border: oklch(0.88 0.02 330);
+  --ring: oklch(0.55 0.15 340);
+}
+
+.theme-berry.dark {
+  --background: oklch(0.16 0.012 340);
+  --foreground: oklch(0.93 0.01 330);
+  --card: oklch(0.20 0.015 340);
+  --primary: oklch(0.68 0.15 340);
+  --primary-foreground: oklch(0.16 0.012 340);
+  --secondary: oklch(0.26 0.02 340);
+  --muted: oklch(0.26 0.015 340);
+  --muted-foreground: oklch(0.66 0.02 330);
+  --accent: oklch(0.30 0.03 340);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.68 0.15 340);
 }
 
 @layer base {
@@ -122,7 +213,12 @@
   }
 }
 
-/* Custom scrollbar for long recipe lists */
+/* Smooth transitions for theme changes */
+*, *::before, *::after {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+
+/* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;

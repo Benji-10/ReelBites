@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error('Failed to create recipe:', err);
     return NextResponse.json(
-      { error: 'Could not save recipe to the database.' },
+      { error: 'Could not save recipe to the database.', details: (err as Error).message },
       { status: 500 },
     );
   }
