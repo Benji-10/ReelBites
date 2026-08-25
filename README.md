@@ -52,16 +52,33 @@ Instagram URL
     └─────────────────┘
 ```
 
+**Architecture: Hybrid (Client-side WASM + Server-side API calls)**
+
+Heavy media processing (ffmpeg, OCR) runs **client-side** via WebAssembly to stay under Netlify's 250MB function size limit. The server only handles API-key-dependent work.
+
+```
+Browser (client-side WASM)          Server (Netlify Functions)
+┌──────────────────────────┐        ┌──────────────────────────┐
+│  1. Download video       │        │  /api/scrape             │
+│  2. ffmpeg.wasm: audio   │───────▶│    → Apify (Instagram)   │
+│  3. ffmpeg.wasm: frames  │        │  /api/transcribe         │
+│  4. Tesseract.js: OCR    │───────▶│    → HuggingFace Whisper │
+│  5. Upload audio         │        │  /api/generate           │
+│  6. Collect all text     │───────▶│    → Gemini LLM          │
+│                          │        │  /api/recipes            │
+│                          │        │    → Neon PostgreSQL     │
+└──────────────────────────┘        └──────────────────────────┘
+```
+
 **Tech Stack:**
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui
-- **Backend**: Next.js API Routes (deployed as Netlify Functions)
+- **Client-side processing**: ffmpeg.wasm (video/audio), Tesseract.js (OCR)
+- **Backend**: Next.js API Routes (deployed as Netlify Functions, ~10MB bundle)
 - **Database**: Neon PostgreSQL + Prisma ORM
 - **Auth**: Netlify Identity (GoTrue)
-- **Instagram scraping**: Apify (free tier)
-- **Audio extraction**: ffmpeg (via `ffmpeg-static`)
-- **Speech-to-text**: OpenAI Whisper via HuggingFace Inference API (free tier)
-- **OCR**: Tesseract.js (runs in-process, no external API)
-- **Recipe generation**: Google Gemini (`gemini-2.5-flash-lite` by default)
+- **Instagram scraping**: Apify (free tier, server-side)
+- **Speech-to-text**: OpenAI Whisper via HuggingFace Inference API (server-side)
+- **Recipe generation**: Google Gemini `gemini-2.5-flash-lite` (server-side)
 - **Hosting**: Netlify
 
 ---

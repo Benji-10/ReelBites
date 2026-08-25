@@ -9,6 +9,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useStore } from '@/lib/store';
 import { LoadingStatus } from './loading-status';
 import { toast } from 'sonner';
+import { runClientPipeline } from '@/lib/client-pipeline';
+import type { SavedRecipe } from '@/lib/types';
 
 export function ExtractorView() {
   const { extraction, startExtraction, updateExtraction, resetExtraction, addRecipe, setView } =
@@ -18,22 +20,18 @@ export function ExtractorView() {
   const formRef = useRef<HTMLFormElement>(null);
 
   const isProcessing = extraction.status === 'processing';
-  // Keep the status visible while processing OR when it has failed/completed
-  // with data to show (logs, error). Only hide it when idle.
   const showStatus =
     isProcessing ||
     (extraction.status === 'failed' && extraction.logs.length > 0) ||
     (extraction.status === 'completed' && extraction.logs.length > 0);
 
-  // Listen for retry events from the LoadingStatus component.
+  // Listen for retry events.
   useEffect(() => {
     const handleRetry = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail;
       if (detail) {
         setUrl(detail);
-        // Reset the extraction state, then trigger a new extraction.
         resetExtraction();
-        // Use a small timeout to let the state update before re-submitting.
         setTimeout(() => {
           if (formRef.current) {
             formRef.current.requestSubmit();
@@ -56,71 +54,81 @@ export function ExtractorView() {
     startExtraction(url.trim());
 
     try {
-      const response = await fetch('/api/extract', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: url.trim() }),
+      const { recipe } = await runClientPipeline(url.trim(), ({ step, message, progress }) => {
+        updateExtraction({ step, message, progress, status: 'processing' });
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Request failed.' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
+      // Save the recipe to the database via the API.
+      const saveResponse = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+        }),
+      });
+
+      let savedRecipe: SavedRecipe;
+
+      if (saveResponse.ok) {
+        const saveData = await saveResponse.json();
+        savedRecipe = {
+          id: saveData.recipe.id,
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      } else {
+        // If save fails, still show the recipe with a temporary ID.
+        savedRecipe = {
+          id: 'temp-' + Date.now(),
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        toast.warning('Recipe extracted but could not save to database.');
       }
 
-      if (!response.body) {
-        throw new Error('No response body received from the server.');
-      }
-
-      // Read the SSE stream.
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Process complete SSE events (separated by \n\n).
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const event of events) {
-          const dataLine = event
-            .split('\n')
-            .find((line) => line.startsWith('data: '));
-          if (!dataLine) continue;
-
-          const jsonStr = dataLine.slice(6);
-          try {
-            const data = JSON.parse(jsonStr);
-            updateExtraction({
-              step: data.step,
-              message: data.message,
-              progress: data.progress,
-              status: data.status,
-              error: data.error,
-              recipe: data.recipe,
-            });
-
-            if (data.status === 'completed' && data.recipe) {
-              addRecipe(data.recipe);
-              toast.success('Recipe extracted successfully!');
-              // Navigate to the recipe detail.
-              setView({ name: 'detail', recipeId: data.recipe.id });
-              resetExtraction();
-              setUrl('');
-            } else if (data.status === 'failed') {
-              throw new Error(data.error || data.message || 'Extraction failed.');
-            }
-          } catch (parseErr) {
-            console.warn('Failed to parse SSE event:', jsonStr, parseErr);
-          }
-        }
-      }
+      addRecipe(savedRecipe);
+      toast.success('Recipe extracted successfully!');
+      setView({ name: 'detail', recipeId: savedRecipe.id });
+      resetExtraction();
+      setUrl('');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error.';
       setError(message);
@@ -148,6 +156,10 @@ export function ExtractorView() {
           Paste a link to any Instagram food reel. We&apos;ll grab the video, transcribe the audio,
           OCR the on-screen text, and use AI to generate a structured recipe — with evidence-backed
           flags for any missing info.
+        </p>
+        <p className="text-xs text-muted-foreground/70 max-w-xl mx-auto">
+          Processing happens in your browser (ffmpeg.wasm + Tesseract.js) to keep the app fast and free.
+          The first run downloads ~30MB of WebAssembly modules (cached afterward).
         </p>
       </div>
 
@@ -207,7 +219,7 @@ export function ExtractorView() {
       {/* Loading Status — stays visible on processing AND failed states */}
       {showStatus && <LoadingStatus onCancel={handleCancel} />}
 
-      {/* How it works — only show when idle (no processing, no error) */}
+      {/* How it works — only show when idle */}
       {!showStatus && (
         <Card>
           <CardHeader>

@@ -1,27 +1,22 @@
 /**
  * Speech-to-text using HuggingFace's Inference API with OpenAI's Whisper model.
  *
- * HuggingFace's free tier supports inference on whisper-large-v3 (and similar).
- * The user provides their HF_API_TOKEN in env vars.
+ * The client extracts audio client-side (using ffmpeg.wasm) and uploads it
+ * to the /api/transcribe endpoint, which calls this function.
  *
- * Alternative: if you prefer, you can swap this for OpenAI's Whisper API
- * (paid) or a local whisper.cpp server — just replace the function body.
+ * HuggingFace's free tier supports inference on whisper-large-v3 (and similar).
  */
-
-import { promises as fs } from 'fs';
-
-const HF_INFERENCE_URL = (model: string) =>
-  `https://api-inference.huggingface.co/models/${model}`;
 
 /**
- * Transcribe an audio file using Whisper via HuggingFace Inference API.
+ * Transcribe an audio buffer using Whisper via HuggingFace Inference API.
  *
- * @param audioPath - Path to the audio file (mp3, wav, etc.).
+ * @param audioBuffer - The audio file as a Buffer (MP3, WAV, etc.)
+ * @param mimeType - The MIME type of the audio (e.g. "audio/mpeg")
  * @returns The transcribed text.
  */
-export async function transcribeAudio(
-  audioPath: string,
-  onProgress?: (message: string) => void,
+export async function transcribeAudioFromBuffer(
+  audioBuffer: Buffer,
+  mimeType: string = 'audio/mpeg',
 ): Promise<string> {
   const token = process.env.HF_API_TOKEN;
   if (!token) {
@@ -31,27 +26,24 @@ export async function transcribeAudio(
   }
 
   const model = process.env.WHISPER_MODEL || 'openai/whisper-large-v3';
-  onProgress?.(`Sending audio to Whisper (${model}) via HuggingFace...`);
-
-  const audioBuffer = await fs.readFile(audioPath);
+  const url = `https://api-inference.huggingface.co/models/${model}`;
 
   // HuggingFace's whisper models accept the raw audio bytes and return JSON
   // with a "text" field. The first call may trigger model loading (~20s).
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const response = await fetch(HF_INFERENCE_URL(model), {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': 'audio/mpeg',
+          'Content-Type': mimeType,
         },
         body: audioBuffer,
       });
 
       if (response.status === 503) {
         // Model is loading. Wait and retry.
-        onProgress?.('Whisper model is loading on HuggingFace, retrying in 15s...');
         await new Promise((r) => setTimeout(r, 15000));
         continue;
       }
@@ -64,18 +56,9 @@ export async function transcribeAudio(
       }
 
       const result = (await response.json()) as { text?: string };
-      const text = result.text?.trim() || '';
-
-      onProgress?.(
-        text
-          ? `Transcription complete (${text.length} chars).`
-          : 'Transcription complete (no speech detected).',
-      );
-
-      return text;
+      return result.text?.trim() || '';
     } catch (err) {
       lastError = err as Error;
-      onProgress?.(`Whisper attempt ${attempt + 1} failed: ${(err as Error).message}`);
       await new Promise((r) => setTimeout(r, 5000));
     }
   }

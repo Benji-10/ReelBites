@@ -1,7 +1,11 @@
 # =============================================================================
 # Netlify Configuration for Reel Recipes
 # =============================================================================
-# Docs: https://docs.netlify.com/configure-builds/file-based-configuration/
+# Architecture: Hybrid (client-side WASM + server-side API calls)
+#
+# Heavy media processing (ffmpeg, OCR) runs client-side via WebAssembly to
+# stay under Netlify's 250MB function size limit. The server only handles
+# API-key-dependent work (Apify, Gemini, Whisper, database).
 # =============================================================================
 
 [build]
@@ -10,54 +14,26 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  # Prisma needs to generate its client during the build.
   PRISMA_GENERATE_IN_POSTINSTALL = "true"
 
 # -----------------------------------------------------------------------------
 # Netlify Functions configuration
 # -----------------------------------------------------------------------------
-# The extraction pipeline can take 2-4 minutes for a typical Instagram reel.
-# Netlify's free tier supports background functions up to 5 minutes (300s) by
-# default — no timeout config needed. On Pro you can extend up to 15 min.
-#
-# To increase the function timeout on Netlify:
-#   Site settings → Functions → Function timeout (seconds)
-#
-# external_node_modules: these packages must NOT be bundled by esbuild.
-#   - @prisma/client / .prisma/client: the generated client lives in
-#     node_modules/.prisma and would get tree-shaken out otherwise.
-#   - ffmpeg-static: ships a platform-specific ffmpeg BINARY. If esbuild
-#     tries to bundle it, the __dirname path resolution breaks and the
-#     function crashes with "spawn .../ffmpeg ENOENT".
-#   - tesseract.js: loads WASM + worker files at runtime; bundling breaks it.
-#
-# included_files: ensures these non-JS files are copied into the function
-# bundle. Without this, esbuild strips out the ffmpeg binary even when the
-# module is marked external.
+# The function bundle is now small (~10MB) because ffmpeg and tesseract
+# binaries run client-side via WASM. Only Prisma needs special handling.
 # -----------------------------------------------------------------------------
 [functions]
   node_bundler = "esbuild"
   external_node_modules = [
     "@prisma/client",
-    ".prisma/client",
-    "ffmpeg-static",
-    "tesseract.js"
+    ".prisma/client"
   ]
-  # Include the ffmpeg binary downloaded by scripts/download-ffmpeg.js
-  # (runs during build). Also include ffmpeg-static's binary as a fallback.
   included_files = [
-    "bin/ffmpeg",
-    "node_modules/ffmpeg-static/**/*",
     "node_modules/.prisma/client/**/*"
   ]
 
 # -----------------------------------------------------------------------------
-# Next.js Runtime Plugin
-# -----------------------------------------------------------------------------
-# This plugin is required for Next.js 16 on Netlify. It handles SSR, API
-# routes, image optimization, and the App Router.
-# It is installed as a devDependency in package.json so Netlify can resolve it
-# from the repo without hitting the network.
+# Next.js Runtime Plugin (required for Next.js on Netlify)
 # -----------------------------------------------------------------------------
 [[plugins]]
   package = "@netlify/plugin-nextjs"
