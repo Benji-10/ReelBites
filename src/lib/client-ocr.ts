@@ -4,30 +4,39 @@
  * Runs entirely in the browser. Tesseract.js downloads its language data
  * (~10MB for English) on first use, cached by the browser afterward.
  *
- * For each frame extracted from the video, we run OCR and collect any text
- * that appears on screen (ingredient lists, timers, step labels, etc.).
+ * IMPORTANT: Tesseract.js's ImageLike type is `string | HTMLImageElement |
+ * HTMLCanvasElement | HTMLVideoElement`. It does NOT accept Blob or
+ * Uint8Array directly. We must convert each frame to a data URL (base64
+ * string) before passing it to worker.recognize().
  *
- * IMPORTANT: The frame data comes from ffmpeg.wasm, which returns Uint8Arrays
- * backed by the WASM heap. When these are passed to Tesseract's worker via
- * postMessage, the ArrayBuffer gets TRANSFERRED (detached), making it
- * unusable. We must copy each frame's data into a fresh ArrayBuffer before
- * creating the Blob.
+ * This also avoids the "ArrayBuffer is detached" error that occurs when
+ * passing Blob/ArrayBuffer data to Tesseract's Web Worker (the worker
+ * transfers the buffer, detaching it).
  */
 
 import Tesseract from 'tesseract.js';
 
 /**
- * Copy a Uint8Array into a fresh ArrayBuffer.
+ * Convert a Uint8Array (JPEG image data) to a base64 data URL.
  *
- * This is necessary because ffmpeg.wasm returns Uint8Arrays that share
- * memory with the WASM heap. Passing these directly to a Web Worker via
- * postMessage (which Tesseract does internally) transfers the ArrayBuffer,
- * detaching it from the original Uint8Array.
+ * Data URLs are strings, so they don't have the ArrayBuffer transfer/detach
+ * issue that Blob/Uint8Array have when passed to Web Workers.
  */
-function copyToFreshBuffer(data: Uint8Array): Uint8Array {
+function uint8ArrayToDataUrl(data: Uint8Array, mimeType: string = 'image/jpeg'): string {
+  // Copy the data into a fresh buffer first (in case it's WASM-backed).
   const copy = new Uint8Array(data.length);
   copy.set(data);
-  return copy;
+
+  // Convert to base64.
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < copy.length; i += chunkSize) {
+    const chunk = copy.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  const base64 = btoa(binary);
+
+  return `data:${mimeType};base64,${base64}`;
 }
 
 /**
@@ -49,11 +58,12 @@ export async function ocrFrames(
 
   onProgress?.(`Running OCR on ${frames.length} frames (language: ${lang})...`);
 
-  // Pre-copy all frame data into fresh ArrayBuffers BEFORE creating the worker.
-  // This prevents the "ArrayBuffer is detached" error when Tesseract's worker
-  // tries to read the data.
-  const safeFrames = frames.map((f) => ({
-    data: copyToFreshBuffer(f.data),
+  // Pre-convert all frames to data URLs.
+  // This is the key fix — Tesseract.js accepts string data URLs, not Blobs.
+  // Data URLs don't have the ArrayBuffer transfer/detach issue.
+  onProgress?.('Preparing frames for OCR...');
+  const frameUrls = frames.map((f) => ({
+    url: uint8ArrayToDataUrl(f.data),
     timestamp: f.timestamp,
   }));
 
@@ -72,16 +82,13 @@ export async function ocrFrames(
   const textParts: string[] = [];
 
   try {
-    for (let i = 0; i < safeFrames.length; i++) {
-      const frame = safeFrames[i];
-      onProgress?.(`OCR frame ${i + 1}/${safeFrames.length} (t=${frame.timestamp}s)...`);
+    for (let i = 0; i < frameUrls.length; i++) {
+      const frame = frameUrls[i];
+      onProgress?.(`OCR frame ${i + 1}/${frameUrls.length} (t=${frame.timestamp}s)...`);
 
       try {
-        // Create a fresh copy for this iteration (the Blob may also transfer
-        // the buffer when passed to the worker).
-        const frameCopy = copyToFreshBuffer(frame.data);
-        const blob = new Blob([frameCopy], { type: 'image/jpeg' });
-        const { data } = await worker.recognize(blob);
+        // Pass the data URL string directly — no Blob, no ArrayBuffer.
+        const { data } = await worker.recognize(frame.url);
         const text = (data.text || '').trim();
 
         if (text.length >= 3) {
