@@ -17,6 +17,7 @@ export interface InstagramComment {
   author: string;
   likes: number;
   isPinned: boolean;
+  isAuthor?: boolean;
 }
 
 export interface VideoFrame {

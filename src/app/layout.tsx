@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Reel Recipes — Turn Instagram Reels into Recipes",
+  title: "RealBites — Turn Instagram Reels into Recipes",
   description:
     "Paste an Instagram reel URL and get a structured recipe with ingredients, instructions, and evidence-backed flags.",
   icons: {

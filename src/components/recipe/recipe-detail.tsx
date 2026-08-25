@@ -235,10 +235,16 @@ export function RecipeDetail() {
   async function handleDelete() {
     if (!recipe) return;
     try {
-      await fetch(`/api/recipes/${recipe.id}`, {
-        method: 'DELETE',
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
+      // Only try to delete from DB if it's a real recipe (not a temp ID).
+      if (!recipe.id.startsWith('temp-')) {
+        const response = await fetch(`/api/recipes/${recipe.id}`, {
+          method: 'DELETE',
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
+        if (!response.ok) {
+          console.warn('Delete from DB failed, removing from local state anyway');
+        }
+      }
       removeRecipe(recipe.id);
       toast.success('Recipe deleted.');
       setView({ name: 'box' });

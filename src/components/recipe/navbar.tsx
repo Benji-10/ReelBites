@@ -45,7 +45,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout }: NavbarPro
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <ChefHat className="h-5 w-5" />
             </div>
-            <span className="hidden sm:inline">Reel Recipes</span>
+            <span className="hidden sm:inline">RealBites</span>
           </button>
 
           {/* Nav */}

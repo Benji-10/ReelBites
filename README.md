@@ -1,4 +1,4 @@
-# 🍳 Reel Recipes
+# 🍳 RealBites
 
 Turn any Instagram food reel into a structured, editable recipe — with AI-extracted ingredients, instructions, and **evidence-backed flags** that warn you when information is missing or unclear.
 
@@ -103,7 +103,7 @@ You'll need accounts on these services. All have generous free tiers:
 
 ```bash
 git clone <your-repo-url>
-cd reel-recipes
+cd realbites
 bun install   # or: npm install
 ```
 
@@ -168,15 +168,15 @@ Open [http://localhost:3000](http://localhost:3000).
    ```bash
    git init
    git add .
-   git commit -m "Initial commit: Reel Recipes"
+   git commit -m "Initial commit: RealBites"
    git branch -M main
-   git remote add origin https://github.com/<your-username>/reel-recipes.git
+   git remote add origin https://github.com/<your-username>/realbites.git
    git push -u origin main
    ```
 
 2. **Create a new Netlify site:**
    - Go to [app.netlify.com](https://app.netlify.com) → "Add new site" → "Import an existing project"
-   - Connect your GitHub account and select the `reel-recipes` repo
+   - Connect your GitHub account and select the `realbites` repo
    - Build settings are auto-detected from `netlify.toml`:
      - **Build command**: `bun run build`
      - **Publish directory**: `.next`
@@ -185,7 +185,7 @@ Open [http://localhost:3000](http://localhost:3000).
 3. **Set environment variables:**
    - In your Netlify site dashboard: Site settings → Environment variables
    - Add all variables from `.env.example` (except `NEXT_PUBLIC_SITE_URL`, which you'll set after the first deploy)
-   - Set `NEXT_PUBLIC_SITE_URL` to your Netlify URL (e.g. `https://reel-recipes.netlify.app`)
+   - Set `NEXT_PUBLIC_SITE_URL` to your Netlify URL (e.g. `https://realbites.netlify.app`)
 
 4. **Enable Netlify Identity:**
    - In your Netlify site dashboard: Integrations → Identity → Enable
@@ -275,7 +275,7 @@ The code will automatically use whatever model name you set.
 ## 📁 Project Structure
 
 ```
-reel-recipes/
+realbites/
 ├── netlify.toml              # Netlify build config
 ├── .env.example              # Environment variable template
 ├── prisma/

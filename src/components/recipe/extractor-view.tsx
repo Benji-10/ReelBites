@@ -49,9 +49,17 @@ export function ExtractorView() {
     startExtraction(url.trim());
 
     try {
-      const { recipe } = await runClientPipeline(url.trim(), ({ step, message, progress }) => {
+      const { recipe, isRecipe } = await runClientPipeline(url.trim(), ({ step, message, progress }) => {
         updateExtraction({ step, message, progress, status: 'processing' });
       });
+
+      // If Gemini determined this is not a recipe, don't save it.
+      if (!isRecipe) {
+        toast.info('This video doesn\'t appear to be a recipe — not saved.');
+        resetExtraction();
+        setUrl('');
+        return;
+      }
 
       const saveResponse = await fetch('/api/recipes', {
         method: 'POST',

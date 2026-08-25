@@ -15,7 +15,7 @@ export interface AuthUser {
 
 const GUEST_USER: AuthUser = {
   id: 'guest-user',
-  email: 'guest@reel-recipes.local',
+  email: 'guest@realbites.local',
   name: 'Guest',
   isGuest: true,
 };

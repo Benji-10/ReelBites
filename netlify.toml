@@ -1,5 +1,5 @@
 # =============================================================================
-# Netlify Configuration for Reel Recipes
+# Netlify Configuration for RealBites
 # =============================================================================
 # Architecture: Hybrid (client-side WASM + server-side API calls)
 #

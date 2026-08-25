@@ -160,11 +160,17 @@ function extractThumbnailUrl(item: ApifyReelResult): string | null {
 /**
  * Extract and normalize comments from an Apify result item.
  * The reel-scraper actor returns comments in `latestComments` (10 most recent).
+ *
+ * Author comments (where the comment author matches the post author) are
+ * prioritized — these often contain the full recipe written out by the creator.
+ * The `firstComment` field is also checked, as Apify often returns it separately
+ * and it's frequently the author's own pinned comment with the recipe.
  */
 function extractComments(item: ApifyReelResult): InstagramComment[] {
   const rawComments = item.latestComments || item.comments || [];
+  const postAuthor = item.ownerUsername || item.owner?.username;
 
-  return rawComments
+  const comments = rawComments
     .map((c): InstagramComment => {
       const text = (c.text || '').trim();
       const author =
@@ -173,10 +179,26 @@ function extractComments(item: ApifyReelResult): InstagramComment[] {
         'unknown';
       const likes = c.likesCount || 0;
       const isPinned = c.pinnedByOwner === true;
+      // Mark as author comment if the commenter is the post author.
+      const isAuthor = postAuthor ? author === postAuthor : false;
 
-      return { text, author, likes, isPinned };
+      return { text, author, likes, isPinned, isAuthor };
     })
     .filter((c) => c.text.length > 0);
+
+  // Also check the firstComment field — Apify sometimes returns it separately,
+  // and it's often the author's pinned comment with the full recipe.
+  if (item.firstComment && typeof item.firstComment === 'string' && item.firstComment.trim()) {
+    comments.unshift({
+      text: item.firstComment.trim(),
+      author: postAuthor || 'unknown',
+      likes: 0,
+      isPinned: true,
+      isAuthor: true,
+    });
+  }
+
+  return comments;
 }
 
 /**
@@ -267,8 +289,11 @@ export async function scrapeInstagramPost(
   const caption = result.caption || null;
   const comments = extractComments(result);
 
-  // Sort comments: pinned first, then by likes descending.
+  // Sort comments: author comments first (they often contain the recipe),
+  // then pinned, then by likes descending.
   comments.sort((a, b) => {
+    if (a.isAuthor && !b.isAuthor) return -1;
+    if (!a.isAuthor && b.isAuthor) return 1;
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;
     return b.likes - a.likes;

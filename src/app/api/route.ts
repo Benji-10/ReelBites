@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
  */
 export async function GET() {
   return NextResponse.json({
-    name: 'Reel Recipes API',
+    name: 'RealBites API',
     version: '1.0.0',
     status: 'ok',
     timestamp: new Date().toISOString(),

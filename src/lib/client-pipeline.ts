@@ -232,11 +232,26 @@ export async function runClientPipeline(
   recipe.imageUrl = post.thumbnailUrl;
   recipe.sourceVideoUrl = post.videoUrl;
 
+  // Check if Gemini determined this is NOT a recipe.
+  const isNotRecipe =
+    recipe.title.toLowerCase().includes('not a recipe') ||
+    recipe.flags.some((f) => f.type === 'not_a_recipe');
+
+  if (isNotRecipe) {
+    onProgress({
+      step: 'done',
+      message: 'This video doesn\'t appear to be a recipe. Not saving.',
+      progress: 100,
+    });
+    // Return the recipe but mark it — the caller should NOT save it.
+    return { recipe, post, isRecipe: false };
+  }
+
   onProgress({
     step: 'done',
     message: 'Recipe extraction complete!',
     progress: 100,
   });
 
-  return { recipe, post };
+  return { recipe, post, isRecipe: true };
 }
