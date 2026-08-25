@@ -27,6 +27,7 @@ import type { SavedRecipe, RecipeIngredient, RecipeInstruction, RecipeMetadata }
 
 import { EvidenceTooltip } from './evidence-tooltip';
 import { CookingMode } from './cooking-mode';
+import { useSettings } from '@/lib/settings';
 
 export function RecipeDetail() {
   const { view, recipes, updateRecipe, removeRecipe, setView, authToken } = useStore();
@@ -50,7 +51,7 @@ export function RecipeDetail() {
 
   // Recipe scaling state.
   const [scaleFactor, setScaleFactor] = useState(1);
-  const [unitSystem, setUnitSystem] = useState<'metric' | 'imperial'>('metric');
+  const { unitSystem } = useSettings();
 
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
@@ -465,27 +466,6 @@ export function RecipeDetail() {
               Ingredients
             </CardTitle>
             <div className="flex items-center gap-1.5">
-              {/* Unit toggle */}
-              {!editing.has('ingredients') && (
-                <div className="flex items-center rounded-md border border-border p-0.5 text-xs">
-                  <button
-                    onClick={() => setUnitSystem('metric')}
-                    className={`px-2 py-1 rounded transition-colors ${
-                      unitSystem === 'metric' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'
-                    }`}
-                  >
-                    Metric
-                  </button>
-                  <button
-                    onClick={() => setUnitSystem('imperial')}
-                    className={`px-2 py-1 rounded transition-colors ${
-                      unitSystem === 'imperial' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'
-                    }`}
-                  >
-                    Imperial
-                  </button>
-                </div>
-              )}
               <EditButton
                 isEditing={editing.has('ingredients')}
                 onSave={() => saveSection('ingredients')}
@@ -661,13 +641,13 @@ export function RecipeDetail() {
       )}
 
       {/* Sources — collapsible */}
-      {(recipe.sourceCaption || recipe.transcript || recipe.ocrText) && (
+      {(recipe.sourceCaption || recipe.sourceComments || recipe.transcript || recipe.ocrText) && (
         <Card>
           <CardContent className="py-4">
             <details className="group">
               <summary className="flex items-center gap-2 cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground select-none">
                 <ChevronRight className="h-4 w-4 group-open:rotate-90 transition-transform" />
-                View sources (caption, transcript, OCR)
+                View sources (caption, comments, transcript, OCR)
               </summary>
               <div className="mt-4 space-y-4 text-xs">
                 {recipe.sourceCaption && (
@@ -676,6 +656,28 @@ export function RecipeDetail() {
                     <p className="text-muted-foreground whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed">
                       {recipe.sourceCaption}
                     </p>
+                  </div>
+                )}
+                {recipe.sourceComments && Array.isArray(recipe.sourceComments) && recipe.sourceComments.length > 0 && (
+                  <div>
+                    <p className="font-semibold mb-1.5 text-foreground">Comments ({recipe.sourceComments.length})</p>
+                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                      {(recipe.sourceComments as Array<{ text: string; author: string; likes: number; isPinned?: boolean; isAuthor?: boolean }>).map((c, i) => (
+                        <div key={i} className="bg-muted/40 rounded-md p-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-foreground">@{c.author}</span>
+                            {c.isPinned && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">Pinned</span>
+                            )}
+                            {c.isAuthor && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">Author</span>
+                            )}
+                            <span className="text-muted-foreground ml-auto">{c.likes} likes</span>
+                          </div>
+                          <p className="text-muted-foreground whitespace-pre-wrap">{c.text}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {recipe.transcript && (

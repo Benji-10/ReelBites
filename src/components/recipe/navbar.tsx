@@ -1,6 +1,6 @@
 'use client';
 
-import { ChefHat, Sparkles, BookOpen, Sun, Moon, Palette, LogOut } from 'lucide-react';
+import { ChefHat, Sparkles, BookOpen, Sun, Moon, Palette, LogOut, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -20,9 +20,10 @@ interface NavbarProps {
   onLogin: () => void;
   onSignup: () => void;
   onLogout: () => void;
+  onOpenSettings: () => void;
 }
 
-export function Navbar({ user, isReady, onLogin, onSignup, onLogout }: NavbarProps) {
+export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSettings }: NavbarProps) {
   const { view, setView, recipes } = useStore();
   const { theme, toggleTheme, colorTheme, setColorTheme } = useTheme();
 
@@ -77,6 +78,11 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout }: NavbarPro
 
           {/* Right side */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Settings */}
+            <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9">
+              <Settings className="h-4 w-4" />
+            </Button>
+
             {/* Theme toggle */}
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-9 w-9">
               {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
