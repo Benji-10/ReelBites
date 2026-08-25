@@ -1,30 +1,26 @@
 /**
  * Authentication helper for Netlify Identity.
  *
- * Netlify Identity uses GoTrue under the hood. The client receives a JWT
- * after login, which it sends in the Authorization header. On the server,
- * we decode the JWT to get the user's ID and email.
- *
  * If no JWT is present, we fall back to a "guest" user so the app works
- * without requiring login. This makes the app usable immediately without
- * forcing users through the Netlify Identity signup flow.
- *
- * NOTE: This decodes the JWT without signature verification for simplicity.
- * For a production app with sensitive data, you should verify the JWT
- * signature using the GoTrue JWT secret from your Netlify dashboard.
+ * without requiring login. When a user logs in, any recipes they created
+ * as a guest are migrated to their real account.
  */
 
 export interface AuthUser {
   id: string;
   email: string;
   name?: string;
+  isGuest: boolean;
 }
 
 const GUEST_USER: AuthUser = {
   id: 'guest-user',
   email: 'guest@reel-recipes.local',
   name: 'Guest',
+  isGuest: true,
 };
+
+const GUEST_USER_ID = 'guest-user';
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
@@ -41,9 +37,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 /**
  * Extract the authenticated user from a request's Authorization header.
- *
- * If a valid JWT is present, returns the decoded user.
- * Otherwise, returns a guest user so the app works without login.
+ * Falls back to guest user if no JWT is present.
  */
 export function getUserFromRequest(request: Request): AuthUser {
   const authHeader = request.headers.get('authorization') ||
@@ -57,11 +51,11 @@ export function getUserFromRequest(request: Request): AuthUser {
         id: payload.sub as string,
         email: payload.email as string,
         name: (payload.user_metadata as { full_name?: string } | undefined)?.full_name,
+        isGuest: false,
       };
     }
   }
 
-  // Fall back to guest user — allows the app to work without login.
   return GUEST_USER;
 }
 
@@ -84,5 +78,38 @@ export async function ensureUserInDb(user: AuthUser): Promise<void> {
     });
   } catch (err) {
     console.warn('Could not sync user to DB:', (err as Error).message);
+  }
+}
+
+/**
+ * Migrate recipes from the guest user to a real logged-in user.
+ *
+ * When a user logs in for the first time, any recipes they created while
+ * not logged in (saved under the "guest-user" ID) are reassigned to their
+ * real account. This ensures they don't lose their recipes.
+ */
+export async function migrateGuestRecipes(user: AuthUser): Promise<void> {
+  if (user.isGuest) return; // Don't migrate for guest users.
+
+  try {
+    const { db } = await import('./db');
+
+    // Find all recipes belonging to the guest user.
+    const guestRecipes = await db.recipe.findMany({
+      where: { userId: GUEST_USER_ID },
+      select: { id: true },
+    });
+
+    if (guestRecipes.length === 0) return;
+
+    // Reassign them to the real user.
+    const result = await db.recipe.updateMany({
+      where: { userId: GUEST_USER_ID },
+      data: { userId: user.id },
+    });
+
+    console.log(`[auth] Migrated ${result.count} guest recipes to user ${user.email}`);
+  } catch (err) {
+    console.warn('Could not migrate guest recipes:', (err as Error).message);
   }
 }

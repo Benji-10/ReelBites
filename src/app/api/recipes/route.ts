@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
+import { getUserFromRequest, ensureUserInDb, migrateGuestRecipes } from '@/lib/auth';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -14,6 +14,10 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
+
+  // If the user is logged in (not a guest), migrate any guest recipes
+  // to their real account before fetching.
+  await migrateGuestRecipes(user);
 
   try {
     const recipes = await db.recipe.findMany({
