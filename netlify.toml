@@ -23,13 +23,30 @@
 # To increase the function timeout on Netlify:
 #   Site settings → Functions → Function timeout (seconds)
 #
-# Prisma must be treated as an external module by esbuild — otherwise the
-# generated client (which lives in node_modules/.prisma) gets tree-shaken
-# out and the functions crash at runtime with "PrismaClient not found".
+# external_node_modules: these packages must NOT be bundled by esbuild.
+#   - @prisma/client / .prisma/client: the generated client lives in
+#     node_modules/.prisma and would get tree-shaken out otherwise.
+#   - ffmpeg-static: ships a platform-specific ffmpeg BINARY. If esbuild
+#     tries to bundle it, the __dirname path resolution breaks and the
+#     function crashes with "spawn .../ffmpeg ENOENT".
+#   - tesseract.js: loads WASM + worker files at runtime; bundling breaks it.
+#
+# included_files: ensures these non-JS files are copied into the function
+# bundle. Without this, esbuild strips out the ffmpeg binary even when the
+# module is marked external.
 # -----------------------------------------------------------------------------
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["@prisma/client", ".prisma/client"]
+  external_node_modules = [
+    "@prisma/client",
+    ".prisma/client",
+    "ffmpeg-static",
+    "tesseract.js"
+  ]
+  included_files = [
+    "node_modules/ffmpeg-static/**/*",
+    "node_modules/.prisma/client/**/*"
+  ]
 
 # -----------------------------------------------------------------------------
 # Next.js Runtime Plugin

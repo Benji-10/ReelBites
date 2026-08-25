@@ -7,18 +7,68 @@
  *
  * Uses ffmpeg-static for the ffmpeg binary so it works in serverless
  * environments (Netlify Functions) without needing a system ffmpeg install.
+ *
+ * On Netlify, the ffmpeg-static binary must be included in the function
+ * bundle via `included_files` in netlify.toml, and the module must be in
+ * `external_node_modules` so esbuild doesn't break the path resolution.
  */
 
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
+import { existsSync } from 'fs';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 
-// Point fluent-ffmpeg at the static binary.
-if (ffmpegPath) {
-  ffmpeg.setFfmpegPath(ffmpegPath);
+/**
+ * Resolve the ffmpeg binary path.
+ *
+ * Tries in order:
+ *   1. The ffmpeg-static package (preferred — bundled with the function)
+ *   2. Common system locations (fallback for environments with system ffmpeg)
+ *   3. The PATH (lets the OS find it)
+ *
+ * Returns null if no ffmpeg binary could be found, which will cause the
+ * extraction to fail with a clear error message.
+ */
+function resolveFfmpegPath(): string | null {
+  // 1. Try ffmpeg-static.
+  try {
+    // Use dynamic require so esbuild leaves this as an external import.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ffmpegStatic = require('ffmpeg-static');
+    if (ffmpegStatic && typeof ffmpegStatic === 'string' && existsSync(ffmpegStatic)) {
+      console.log('[ffmpeg] Using ffmpeg-static binary at:', ffmpegStatic);
+      return ffmpegStatic;
+    }
+    // ffmpeg-static may return a path that doesn't exist yet on this platform.
+    console.warn('[ffmpeg] ffmpeg-static returned a path but file does not exist:', ffmpegStatic);
+  } catch (err) {
+    console.warn('[ffmpeg] Could not load ffmpeg-static:', (err as Error).message);
+  }
+
+  // 2. Try common system locations.
+  const systemPaths = [
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/opt/bin/ffmpeg',
+  ];
+  for (const p of systemPaths) {
+    if (existsSync(p)) {
+      console.log('[ffmpeg] Using system ffmpeg at:', p);
+      return p;
+    }
+  }
+
+  // 3. Return null — let fluent-ffmpeg try the PATH.
+  console.warn('[ffmpeg] No ffmpeg binary found via ffmpeg-static or system paths. Trying PATH...');
+  return null;
+}
+
+// Resolve and set the ffmpeg path at module load time.
+const resolvedFfmpegPath = resolveFfmpegPath();
+if (resolvedFfmpegPath) {
+  ffmpeg.setFfmpegPath(resolvedFfmpegPath);
 }
 
 const TMP_DIR = tmpdir();
@@ -111,6 +161,16 @@ export async function extractAudio(
   videoPath: string,
   onProgress?: (message: string) => void,
 ): Promise<string> {
+  // Pre-check: verify ffmpeg is available before starting.
+  if (!resolvedFfmpegPath) {
+    throw new Error(
+      'ffmpeg binary not found. The ffmpeg-static package should provide one, ' +
+        'but it may not be included in the Netlify function bundle. ' +
+        'Check that netlify.toml includes "ffmpeg-static" in both ' +
+        'external_node_modules and included_files.',
+    );
+  }
+
   const audioPath = videoPath.replace(/\.mp4$/, '.mp3');
   onProgress?.('Extracting audio track with ffmpeg...');
 
