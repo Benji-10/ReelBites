@@ -322,17 +322,27 @@ export async function extractFrames(
 
   ffmpeg.on('progress', progressHandler);
 
+  // Add a timeout — if ffmpeg hangs (common with WASM memory errors),
+  // abort after 90 seconds and use whatever frames were extracted.
+  const execPromise = ffmpeg.exec([
+    '-i', 'input.mp4',
+    '-vf', `fps=1/${intervalSeconds},scale=640:-1`,
+    '-frames:v', String(maxFrames),
+    '-q:v', '5',
+    'frame_%04d.jpg',
+  ]);
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Frame extraction timed out after 90s')), 90000);
+  });
+
   try {
-    await ffmpeg.exec([
-      '-i', 'input.mp4',
-      '-vf', `fps=1/${intervalSeconds},scale=640:-1`,
-      '-frames:v', String(maxFrames),
-      '-q:v', '5',
-      'frame_%04d.jpg',
-    ]);
+    await Promise.race([execPromise, timeoutPromise]);
   } catch (err) {
     console.error('[extractFrames] exec failed:', err);
     onProgress?.('Frame extraction had errors, checking partial results...');
+    // Terminate the hung ffmpeg instance.
+    await resetFfmpeg();
   }
 
   ffmpeg.off('progress', progressHandler);

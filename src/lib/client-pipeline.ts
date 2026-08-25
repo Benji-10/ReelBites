@@ -160,6 +160,7 @@ export async function runClientPipeline(
 
   // Step 5: Extract video frames with ffmpeg.wasm (client-side).
   let ocrText = '';
+  let frames: { data: Uint8Array; timestamp: number }[] = [];
   try {
     onProgress({
       step: 'frames',
@@ -173,7 +174,7 @@ export async function runClientPipeline(
     const intervalSeconds = 2;
     const maxFrames = 25; // Cap at 25 frames for speed.
 
-    const frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
+    frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
       onProgress({ step: 'frames', message: msg, progress: 72 }),
     );
 
@@ -211,12 +212,30 @@ export async function runClientPipeline(
     progress: 88,
   });
 
+  // Filter comments for Gemini: only send author comments that contain
+  // recipe-related keywords. This ensures Gemini focuses on the actual recipe
+  // (often written by the creator in a pinned comment) rather than random
+  // viewer comments.
+  const RECIPE_KEYWORDS = ['recipe', 'ingredients', 'cup', 'tbsp', 'tsp', 'gram', 'oz', 'lb', 'kg', 'ml', 'temperature', 'bake', 'cook', 'fry', 'mix', 'add', 'stir', 'oven', 'minutes', 'hours', 'serves', 'servings'];
+  const commentsForGemini = (post.comments || []).filter((c) => {
+    if (!c.isAuthor) return false;
+    const lowerText = c.text.toLowerCase();
+    return RECIPE_KEYWORDS.some((kw) => lowerText.includes(kw));
+  });
+
+  console.log('[pipeline] Comments for Gemini:', {
+    total: post.comments?.length || 0,
+    authorComments: (post.comments || []).filter((c) => c.isAuthor).length,
+    recipeKeywordMatched: commentsForGemini.length,
+    comments: commentsForGemini.map((c) => ({ author: c.author, textPreview: c.text.slice(0, 80) })),
+  });
+
   const generateResponse = await fetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       caption: post.caption,
-      comments: post.comments,
+      comments: commentsForGemini,
       transcript,
       ocrText,
       sourceUrl: instagramUrl,

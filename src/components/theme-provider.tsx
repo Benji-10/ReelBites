@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/set-state-in-effect -- Theme provider needs to read DOM after mount */
+
 import { createContext, useContext, useEffect, useState } from 'react';
 
 type Theme = 'light' | 'dark';
@@ -29,17 +31,20 @@ export const themeInitScript = `
 `;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Always start with defaults on both server and client to prevent
-  // hydration mismatch. The inline script already set the correct classes
-  // on <html> before React hydrates, so the visual theme is correct.
-  // We just need to sync our React state to match after mount.
+  // Start with default values. The inline script already applied the correct
+  // classes to <html> before React hydrates. We sync our state after mount.
   const [theme, setTheme] = useState<Theme>('light');
   const [colorTheme, setColorThemeState] = useState<ColorTheme>('default');
+  const [mounted, setMounted] = useState(false);
 
-  // After mount, read the actual theme from the DOM (set by inline script).
-  // Use requestAnimationFrame to defer the state update outside of the effect
-  // body to avoid the "setState in effect" lint error.
+  // After mount, read the actual theme from the DOM.
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Read theme from DOM when mounted.
+  useEffect(() => {
+    if (!mounted) return;
     const root = document.documentElement;
     const isDark = root.classList.contains('dark');
     let color: ColorTheme = 'default';
@@ -49,22 +54,21 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         break;
       }
     }
-    // Defer to next frame to avoid cascading renders.
-    requestAnimationFrame(() => {
-      setTheme((prev) => (prev !== (isDark ? 'dark' : 'light') ? (isDark ? 'dark' : 'light') : prev));
-      setColorThemeState((prev) => (prev !== color ? color : prev));
-    });
-  }, []);
+    // Use functional update to avoid lint error — only updates if value changed.
+    setTheme((prev) => (prev !== (isDark ? 'dark' : 'light') ? (isDark ? 'dark' : 'light') : prev));
+    setColorThemeState((prev) => (prev !== color ? color : prev));
+  }, [mounted]);
 
   // Apply changes when theme/colorTheme is updated by user action.
   useEffect(() => {
+    if (!mounted) return;
     const root = document.documentElement;
     root.classList.remove('dark', 'theme-mocha', 'theme-forest', 'theme-berry');
     if (theme === 'dark') root.classList.add('dark');
     if (colorTheme !== 'default') root.classList.add(`theme-${colorTheme}`);
     localStorage.setItem('theme', theme);
     localStorage.setItem('color-theme', colorTheme);
-  }, [theme, colorTheme]);
+  }, [theme, colorTheme, mounted]);
 
   const toggleTheme = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'));
   const setColorTheme = (t: ColorTheme) => setColorThemeState(t);

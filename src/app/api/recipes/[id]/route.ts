@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getUserFromRequest } from '@/lib/auth';
+import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -120,13 +120,29 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   const user = getUserFromRequest(request);
+  await ensureUserInDb(user);
 
   const { id } = await params;
 
   try {
+    // First check if the recipe exists at all.
     const existing = await db.recipe.findUnique({ where: { id } });
-    if (!existing || existing.userId !== user.id) {
+    if (!existing) {
+      // Recipe doesn't exist in DB — could be a temp ID or already deleted.
+      return NextResponse.json({ success: true, message: 'Recipe not in DB (already deleted or temp ID).' });
+    }
+
+    // Allow deletion if the recipe belongs to this user OR to the guest user.
+    // This handles the case where a recipe was created as a guest and then
+    // the user logged in (or vice versa).
+    if (existing.userId !== user.id && existing.userId !== 'guest-user') {
       return NextResponse.json({ error: 'Recipe not found.' }, { status: 404 });
+    }
+
+    // If the recipe belongs to the guest user but the current user is logged in,
+    // migrate it first (so the migration logic is consistent).
+    if (existing.userId === 'guest-user' && !user.isGuest) {
+      await db.recipe.update({ where: { id }, data: { userId: user.id } });
     }
 
     await db.recipe.delete({ where: { id } });
