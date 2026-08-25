@@ -17,16 +17,18 @@
 # Netlify Functions configuration
 # -----------------------------------------------------------------------------
 # The extraction pipeline can take 2-4 minutes for a typical Instagram reel.
-# Netlify's free tier supports functions up to 10 seconds (synchronous) or
-# 5 minutes (background). We set the timeout to the free-tier max (300s).
-# On Netlify Pro you can increase this to 900 (15 min).
+# Netlify's free tier supports background functions up to 5 minutes (300s) by
+# default — no timeout config needed. On Pro you can extend up to 15 min.
+#
+# To increase the function timeout on Netlify:
+#   Site settings → Functions → Function timeout (seconds)
+#
+# Prisma must be treated as an external module by esbuild — otherwise the
+# generated client (which lives in node_modules/.prisma) gets tree-shaken
+# out and the functions crash at runtime with "PrismaClient not found".
 # -----------------------------------------------------------------------------
 [functions]
   node_bundler = "esbuild"
-  timeout = 300
-  # Prisma must be treated as an external module by esbuild — otherwise the
-  # generated client (which lives in node_modules/.prisma) gets tree-shaken
-  # out and the functions crash at runtime with "PrismaClient not found".
   external_node_modules = ["@prisma/client", ".prisma/client"]
 
 # -----------------------------------------------------------------------------
@@ -34,8 +36,8 @@
 # -----------------------------------------------------------------------------
 # This plugin is required for Next.js 16 on Netlify. It handles SSR, API
 # routes, image optimization, and the App Router.
-# It is installed as a devDependency in package.json (see "dependencies" there)
-# so Netlify can resolve it from the repo without hitting the network.
+# It is installed as a devDependency in package.json so Netlify can resolve it
+# from the repo without hitting the network.
 # -----------------------------------------------------------------------------
 [[plugins]]
   package = "@netlify/plugin-nextjs"
