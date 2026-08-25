@@ -18,9 +18,6 @@ interface RouteParams {
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   const user = getUserFromRequest(request);
-  if (!user) {
-    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  }
 
   const { id } = await params;
 
@@ -58,9 +55,6 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   const user = getUserFromRequest(request);
-  if (!user) {
-    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  }
 
   const { id } = await params;
 
@@ -126,9 +120,6 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   const user = getUserFromRequest(request);
-  if (!user) {
-    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  }
 
   const { id } = await params;
 

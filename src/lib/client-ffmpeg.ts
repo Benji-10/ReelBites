@@ -95,6 +95,10 @@ async function getFfmpeg(onProgress?: (message: string) => void): Promise<FFmpeg
 
 /**
  * Download a video URL and return it as a Uint8Array.
+ *
+ * Handles 302 redirects (common with Instagram CDN URLs) by following
+ * them automatically. The fetch API follows redirects by default, but
+ * we add retry logic for transient network errors.
  */
 export async function downloadVideo(
   videoUrl: string,
@@ -102,53 +106,76 @@ export async function downloadVideo(
 ): Promise<Uint8Array> {
   onProgress?.(`Downloading video from ${new URL(videoUrl).hostname}...`);
 
-  const response = await fetch(videoUrl);
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Failed to download video: HTTP ${response.status}`);
-  }
+  // Try up to 3 times — Instagram CDN can be flaky.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      onProgress?.(`Downloading video (attempt ${attempt}/3)...`);
 
-  const contentLength = response.headers.get('content-length');
-  const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+      const response = await fetch(videoUrl, {
+        redirect: 'follow', // Follow 302 redirects automatically.
+      });
 
-  if (!response.body) {
-    throw new Error('Video download returned no body.');
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let receivedBytes = 0;
-  let lastProgressUpdate = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    receivedBytes += value.length;
-
-    if (totalBytes > 0) {
-      const percent = Math.floor((receivedBytes / totalBytes) * 100);
-      if (percent >= lastProgressUpdate + 10) {
-        lastProgressUpdate = percent;
-        onProgress?.(`Downloading video... ${percent}% (${(receivedBytes / 1024 / 1024).toFixed(1)} MB)`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
-    } else if (receivedBytes - lastProgressUpdate > 1024 * 1024) {
-      lastProgressUpdate = receivedBytes;
-      onProgress?.(`Downloading video... ${(receivedBytes / 1024 / 1024).toFixed(1)} MB`);
+
+      const contentLength = response.headers.get('content-length');
+      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+
+      if (!response.body) {
+        throw new Error('Video download returned no body.');
+      }
+
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      let lastProgressUpdate = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        receivedBytes += value.length;
+
+        if (totalBytes > 0) {
+          const percent = Math.floor((receivedBytes / totalBytes) * 100);
+          if (percent >= lastProgressUpdate + 10) {
+            lastProgressUpdate = percent;
+            onProgress?.(`Downloading video... ${percent}% (${(receivedBytes / 1024 / 1024).toFixed(1)} MB)`);
+          }
+        } else if (receivedBytes - lastProgressUpdate > 1024 * 1024) {
+          lastProgressUpdate = receivedBytes;
+          onProgress?.(`Downloading video... ${(receivedBytes / 1024 / 1024).toFixed(1)} MB`);
+        }
+      }
+
+      // Merge all chunks into a single Uint8Array.
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const result = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      onProgress?.(`Video downloaded: ${(totalLength / 1024 / 1024).toFixed(1)} MB (${totalLength} bytes)`);
+      return result;
+    } catch (err) {
+      lastError = err as Error;
+      console.error(`[downloadVideo] Attempt ${attempt} failed:`, lastError.message);
+      if (attempt < 3) {
+        onProgress?.(`Download failed (attempt ${attempt}), retrying...`);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
   }
 
-  // Merge all chunks into a single Uint8Array.
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  onProgress?.(`Video downloaded: ${(totalLength / 1024 / 1024).toFixed(1)} MB (${totalLength} bytes)`);
-  return result;
+  throw new Error(
+    `Failed to download video after 3 attempts. Last error: ${lastError?.message}. ` +
+      'The Instagram CDN URL may have expired or be rate-limiting you.',
+  );
 }
 
 /**
@@ -189,6 +216,10 @@ export async function extractAudio(
   }
 
   onProgress?.('Extracting audio track (16kHz mono MP3)...');
+
+  // Reset the ffmpeg instance if it's in a bad state from a previous run.
+  // The "Unrecognized option 'y'" error happens when the WASM core crashes
+  // and leaves the ffmpeg instance in an inconsistent state.
   try {
     await ffmpeg.exec([
       '-i', 'input.mp4',
@@ -202,7 +233,41 @@ export async function extractAudio(
     console.log('[extractAudio] exec succeeded');
   } catch (err) {
     console.error('[extractAudio] exec failed:', err);
-    throw new Error(`ffmpeg.exec (audio) failed: ${(err as Error).message}`);
+    // Check if the output file exists anyway (ffmpeg sometimes "fails" but
+    // still produces output).
+    let hasOutput = false;
+    try {
+      const data = await ffmpeg.readFile('output.mp3');
+      if (data && (data as Uint8Array).length > 0) {
+        hasOutput = true;
+        console.log('[extractAudio] Output exists despite error, continuing');
+        const rawAudio = data as Uint8Array;
+        const audioBytes = new Uint8Array(rawAudio.length);
+        audioBytes.set(rawAudio);
+
+        // Clean up.
+        try {
+          await ffmpeg.deleteFile('input.mp4');
+          await ffmpeg.deleteFile('output.mp3');
+        } catch {}
+
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < audioBytes.length; i += chunkSize) {
+          const chunk = audioBytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode(...chunk);
+        }
+        const audioBase64 = btoa(binary);
+        onProgress?.(`Audio extracted: ${(audioBytes.length / 1024).toFixed(1)} KB`);
+        return { audioBase64, audioSize: audioBytes.length };
+      }
+    } catch {
+      // No output.
+    }
+
+    if (!hasOutput) {
+      throw new Error(`ffmpeg.exec (audio) failed: ${(err as Error).message}`);
+    }
   }
 
   onProgress?.('Reading extracted audio...');
@@ -245,25 +310,15 @@ export async function extractAudio(
 /**
  * Extract frames from a video at a fixed interval using ffmpeg.wasm.
  *
- * OPTIMIZATIONS:
- *   - Frames are resized to 640px wide (preserving aspect ratio) to reduce
- *     OCR processing time. Tesseract doesn't need full resolution.
- *   - JPEG quality set to 5 (low) since OCR only needs text contrast.
- *   - Default maxFrames reduced to 15 (enough for a recipe reel).
- *   - Default interval increased to 3 seconds.
- *
- * These changes reduce frame extraction time from ~60s to ~15s on a typical
- * 13-second reel, and reduce OCR time by 4x (smaller images).
- *
  * @param videoData - The video file as a Uint8Array (will be copied internally)
- * @param intervalSeconds - Seconds between frames (default: 3)
- * @param maxFrames - Maximum number of frames to extract (default: 15)
+ * @param intervalSeconds - Seconds between frames (default: 1.5)
+ * @param maxFrames - Maximum number of frames to extract (default: 20)
  * @returns Array of { data: Uint8Array, timestamp: number }
  */
 export async function extractFrames(
   videoData: Uint8Array,
-  intervalSeconds: number = 3,
-  maxFrames: number = 15,
+  intervalSeconds: number = 1.5,
+  maxFrames: number = 20,
   onProgress?: (message: string) => void,
 ): Promise<{ data: Uint8Array; timestamp: number }[]> {
   console.log('[extractFrames] Starting', {
@@ -340,12 +395,14 @@ export async function extractFrames(
   } catch (err) {
     console.error('[extractFrames] exec failed:', err);
     ffmpeg.off('progress', progressHandler);
-    throw new Error(`ffmpeg.exec (frames) failed: ${(err as Error).message}`);
+    // Don't throw immediately — ffmpeg may have partially succeeded.
+    // We'll check what frames were actually created and use those.
+    onProgress?.('Frame extraction had errors, checking partial results...');
   }
 
   ffmpeg.off('progress', progressHandler);
 
-  // Read all generated frames.
+  // Read all generated frames (may be partial if exec failed).
   onProgress?.('Reading extracted frames...');
   const frames: { data: Uint8Array; timestamp: number }[] = [];
   for (let i = 1; i <= maxFrames; i++) {

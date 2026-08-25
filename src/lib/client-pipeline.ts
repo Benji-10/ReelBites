@@ -128,31 +128,52 @@ export async function runClientPipeline(
   });
 
   // Step 5: Extract video frames with ffmpeg.wasm (client-side).
-  onProgress({
-    step: 'frames',
-    message: 'Extracting video frames for OCR...',
-    progress: 62,
-  });
+  // This is wrapped in try/catch because ffmpeg.wasm can crash with
+  // "memory access out of bounds" on some videos. If it fails, we
+  // continue without OCR — the recipe will still be generated from
+  // the caption and transcript.
+  let ocrText = '';
+  try {
+    onProgress({
+      step: 'frames',
+      message: 'Extracting video frames for OCR...',
+      progress: 62,
+    });
 
-  // Use optimized defaults: 3-second interval, max 15 frames, resized to 640px.
-  // This reduces extraction time from ~60s to ~15s.
-  const intervalSeconds = 3;
-  const maxFrames = 15;
+    // 1.5-second interval, max 20 frames (good balance of coverage vs speed).
+    const intervalSeconds = 1.5;
+    const maxFrames = 20;
 
-  const frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
-    onProgress({ step: 'frames', message: msg, progress: 75 }),
-  );
+    const frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
+      onProgress({ step: 'frames', message: msg, progress: 75 }),
+    );
 
-  // Step 6: Run OCR on frames (client-side Tesseract.js).
-  onProgress({
-    step: 'ocr',
-    message: 'Running OCR on video frames...',
-    progress: 70,
-  });
+    // Step 6: Run OCR on frames (client-side Tesseract.js).
+    if (frames.length > 0) {
+      onProgress({
+        step: 'ocr',
+        message: 'Running OCR on video frames...',
+        progress: 78,
+      });
 
-  const ocrText = await ocrFrames(frames, (msg) =>
-    onProgress({ step: 'ocr', message: msg, progress: 85 }),
-  );
+      ocrText = await ocrFrames(frames, (msg) =>
+        onProgress({ step: 'ocr', message: msg, progress: 85 }),
+      );
+    } else {
+      onProgress({
+        step: 'ocr',
+        message: 'No frames extracted, skipping OCR.',
+        progress: 85,
+      });
+    }
+  } catch (err) {
+    console.warn('[pipeline] Frame extraction/OCR failed, continuing without OCR:', err);
+    onProgress({
+      step: 'ocr',
+      message: `OCR skipped: ${(err as Error).message.slice(0, 80)}. Continuing with caption + transcript only.`,
+      progress: 85,
+    });
+  }
 
   // Step 7: Generate recipe via server API (Gemini).
   onProgress({

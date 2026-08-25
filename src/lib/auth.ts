@@ -5,14 +5,13 @@
  * after login, which it sends in the Authorization header. On the server,
  * we decode the JWT to get the user's ID and email.
  *
- * For local development without Netlify Identity configured, we fall back
- * to a "dev user" so the app can be tested end-to-end. In production
- * (NETLIFY_IDENTITY_URL is set), auth is required.
+ * If no JWT is present, we fall back to a "guest" user so the app works
+ * without requiring login. This makes the app usable immediately without
+ * forcing users through the Netlify Identity signup flow.
  *
  * NOTE: This decodes the JWT without signature verification for simplicity.
  * For a production app with sensitive data, you should verify the JWT
  * signature using the GoTrue JWT secret from your Netlify dashboard.
- * See: https://docs.netlify.com/visitor-access/identity/#jwt-tokens
  */
 
 export interface AuthUser {
@@ -21,23 +20,16 @@ export interface AuthUser {
   name?: string;
 }
 
-const DEV_USER: AuthUser = {
-  id: 'dev-user',
-  email: 'dev@localhost',
-  name: 'Developer',
+const GUEST_USER: AuthUser = {
+  id: 'guest-user',
+  email: 'guest@reel-recipes.local',
+  name: 'Guest',
 };
-
-function isProductionAuth(): boolean {
-  // In production, NETLIFY_IDENTITY_URL is set by Netlify automatically,
-  // or by the user in .env.
-  return !!process.env.NETLIFY_IDENTITY_URL;
-}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    // JWT base64 is URL-safe and may lack padding.
     const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
     const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
     const json = Buffer.from(padded, 'base64').toString('utf-8');
@@ -50,14 +42,10 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 /**
  * Extract the authenticated user from a request's Authorization header.
  *
- * Returns null if:
- *   - No Authorization header is present, OR
- *   - The token is invalid, AND we're in production mode.
- *
- * In dev mode (no NETLIFY_IDENTITY_URL), returns a dev user so the app
- * can be tested without auth.
+ * If a valid JWT is present, returns the decoded user.
+ * Otherwise, returns a guest user so the app works without login.
  */
-export function getUserFromRequest(request: Request): AuthUser | null {
+export function getUserFromRequest(request: Request): AuthUser {
   const authHeader = request.headers.get('authorization') ||
     request.headers.get('Authorization');
 
@@ -73,34 +61,12 @@ export function getUserFromRequest(request: Request): AuthUser | null {
     }
   }
 
-  // Dev mode fallback.
-  if (!isProductionAuth()) {
-    return DEV_USER;
-  }
-
-  return null;
-}
-
-/**
- * Require authentication. Throws a 401 error if no user is found.
- */
-export function requireUser(request: Request): AuthUser {
-  const user = getUserFromRequest(request);
-  if (!user) {
-    throw new Response(
-      JSON.stringify({ error: 'Authentication required. Please log in.' }),
-      {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      },
-    );
-  }
-  return user;
+  // Fall back to guest user — allows the app to work without login.
+  return GUEST_USER;
 }
 
 /**
  * Ensure the user exists in the database (creates if not).
- * This is called after auth to sync the user record.
  */
 export async function ensureUserInDb(user: AuthUser): Promise<void> {
   try {
@@ -117,7 +83,6 @@ export async function ensureUserInDb(user: AuthUser): Promise<void> {
       },
     });
   } catch (err) {
-    // If the DB isn't available (e.g. local dev without Neon), just continue.
     console.warn('Could not sync user to DB:', (err as Error).message);
   }
 }

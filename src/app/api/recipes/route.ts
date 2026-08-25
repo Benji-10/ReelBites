@@ -13,9 +13,6 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   const user = getUserFromRequest(request);
-  if (!user) {
-    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  }
   await ensureUserInDb(user);
 
   try {
@@ -52,9 +49,6 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const user = getUserFromRequest(request);
-  if (!user) {
-    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  }
   await ensureUserInDb(user);
 
   let body: {
