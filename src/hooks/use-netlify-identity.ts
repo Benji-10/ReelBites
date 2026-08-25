@@ -134,13 +134,23 @@ export function useNetlifyIdentity(): UseNetlifyIdentityResult {
   }, []);
 
   const logout = useCallback(() => {
-    if (window.netlifyIdentity?.currentUser()) {
-      window.netlifyIdentity.currentUser();
-      // The widget doesn't have a direct logout method — trigger via store.
-      const store = window.netlifyIdentity.store?.get() as
-        | { logout?: () => void }
-        | undefined;
-      store?.logout?.();
+    // The netlify-identity-widget doesn't have a simple logout() method.
+    // The safest approach is to clear the local storage and reload.
+    try {
+      if (typeof window !== 'undefined') {
+        // Remove the gotrue-js stored session.
+        localStorage.removeItem('netlify-user');
+        localStorage.removeItem('gotrue-js');
+        // The widget stores its state under a key starting with 'netlify-site'
+        // — clear all such keys.
+        Object.keys(localStorage).forEach((key) => {
+          if (key.startsWith('netlify') || key.startsWith('gotrue')) {
+            localStorage.removeItem(key);
+          }
+        });
+      }
+    } catch {
+      // Best-effort.
     }
     setUser(null);
     // Reload to clear any cached state.

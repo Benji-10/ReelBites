@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
-  ChefHat, ListOrdered, Clock, Users, Minus, Maximize2,
+  ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -512,13 +512,13 @@ export function RecipeDetail() {
               </Button>
             </div>
           ) : (
-            <ol className="space-y-3">
+            <ol className="space-y-5">
               {recipe.instructions?.map((inst, i) => (
                 <li key={i} className="flex gap-3">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold shrink-0">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold shrink-0 mt-0.5">
                     {i + 1}
                   </div>
-                  <p className="text-sm leading-relaxed pt-0.5">{inst.step}</p>
+                  <p className="text-sm leading-relaxed flex-1">{inst.step}</p>
                 </li>
               ))}
             </ol>
@@ -546,6 +546,46 @@ export function RecipeDetail() {
                 </li>
               ))}
             </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sources — collapsible */}
+      {(recipe.sourceCaption || recipe.transcript || recipe.ocrText) && (
+        <Card>
+          <CardContent className="py-4">
+            <details className="group">
+              <summary className="flex items-center gap-2 cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground select-none">
+                <ChevronRight className="h-4 w-4 group-open:rotate-90 transition-transform" />
+                View sources (caption, transcript, OCR)
+              </summary>
+              <div className="mt-4 space-y-4 text-xs">
+                {recipe.sourceCaption && (
+                  <div>
+                    <p className="font-semibold mb-1.5 text-foreground">Caption</p>
+                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed">
+                      {recipe.sourceCaption}
+                    </p>
+                  </div>
+                )}
+                {recipe.transcript && (
+                  <div>
+                    <p className="font-semibold mb-1.5 text-foreground">Audio Transcript</p>
+                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed max-h-60 overflow-y-auto custom-scrollbar">
+                      {recipe.transcript}
+                    </p>
+                  </div>
+                )}
+                {recipe.ocrText && (
+                  <div>
+                    <p className="font-semibold mb-1.5 text-foreground">OCR Text (on-screen)</p>
+                    <p className="text-muted-foreground whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed max-h-60 overflow-y-auto custom-scrollbar">
+                      {recipe.ocrText}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </details>
           </CardContent>
         </Card>
       )}
