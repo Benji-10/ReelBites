@@ -128,6 +128,23 @@ export async function runExtractionPipeline(
     }
 
     // Step 3: Extract audio.
+    // First, verify ffmpeg is available and report its path to the client.
+    const { getFfmpegPath } = await import('./video');
+    const ffmpegPath = getFfmpegPath();
+    if (!ffmpegPath) {
+      throw new Error(
+        'ffmpeg binary not found in the function environment. ' +
+          'Tried: /usr/bin/ffmpeg, /usr/local/bin/ffmpeg, /opt/bin/ffmpeg, ' +
+          '@ffmpeg-installer/ffmpeg, ffmpeg-static, and PATH lookup. ' +
+          'Visit /api/debug/ffmpeg for full diagnostics.',
+      );
+    }
+    onProgress({
+      step: 'audio',
+      message: `Using ffmpeg at: ${ffmpegPath}`,
+      progress: 34,
+    });
+
     onProgress({
       step: 'audio',
       message: 'Extracting audio track...',

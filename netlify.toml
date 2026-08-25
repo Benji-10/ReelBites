@@ -43,7 +43,10 @@
     "ffmpeg-static",
     "tesseract.js"
   ]
+  # Include the ffmpeg binary downloaded by scripts/download-ffmpeg.js
+  # (runs during build). Also include ffmpeg-static's binary as a fallback.
   included_files = [
+    "bin/ffmpeg",
     "node_modules/ffmpeg-static/**/*",
     "node_modules/.prisma/client/**/*"
   ]

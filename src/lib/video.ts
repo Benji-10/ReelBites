@@ -5,81 +5,144 @@
  * - Extracts the audio track (for Whisper STT).
  * - Extracts frames at a fixed interval (for OCR).
  *
- * Uses ffmpeg-static for the ffmpeg binary so it works in serverless
- * environments (Netlify Functions) without needing a system ffmpeg install.
+ * FFmpeg binary resolution strategy (tries in order):
+ *   1. System ffmpeg at common Linux paths (/usr/bin/ffmpeg, etc.)
+ *   2. @ffmpeg-installer/ffmpeg package (robust path resolution)
+ *   3. ffmpeg-static package (fallback)
+ *   4. PATH lookup via `which ffmpeg`
  *
- * On Netlify, the ffmpeg-static binary must be included in the function
- * bundle via `included_files` in netlify.toml, and the module must be in
- * `external_node_modules` so esbuild doesn't break the path resolution.
+ * On Netlify, the binary files from these packages must be included in the
+ * function bundle via `included_files` in netlify.toml.
  */
 
 import ffmpeg from 'fluent-ffmpeg';
-import { existsSync, chmodSync } from 'fs';
+import { existsSync, chmodSync, accessSync, constants } from 'fs';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { execSync } from 'child_process';
+
+/**
+ * Check if a file exists AND is executable.
+ */
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Try to make a file executable (best-effort — may fail on read-only filesystems).
+ */
+function makeExecutable(filePath: string): void {
+  try {
+    chmodSync(filePath, 0o755);
+    console.log(`[ffmpeg] Set executable permission on: ${filePath}`);
+  } catch (err) {
+    console.warn(`[ffmpeg] Could not chmod ${filePath}:`, (err as Error).message);
+  }
+}
 
 /**
  * Resolve the ffmpeg binary path.
  *
- * Tries in order:
- *   1. The ffmpeg-static package (preferred — bundled with the function)
- *   2. Common system locations (fallback for environments with system ffmpeg)
- *   3. The PATH (lets the OS find it)
- *
- * Returns null if no ffmpeg binary could be found, which will cause the
- * extraction to fail with a clear error message.
+ * Tries multiple sources in order of reliability on serverless platforms.
+ * Returns the path to a working ffmpeg binary, or null if none found.
  */
 function resolveFfmpegPath(): string | null {
-  // 1. Try common system locations FIRST.
-  // On Netlify's AWS Lambda runtime, ffmpeg is often available at these paths.
-  // System ffmpeg is more reliable than ffmpeg-static because it doesn't have
-  // bundling/path-resolution issues.
-  const systemPaths = [
-    '/usr/bin/ffmpeg',
-    '/usr/local/bin/ffmpeg',
+  const triedPaths: string[] = [];
+
+  // 1. Try the project's bin/ffmpeg (downloaded during build by scripts/download-ffmpeg.js).
+  // This is the most reliable source because the binary is committed to the
+  // function bundle via included_files in netlify.toml.
+  // We check several possible locations where the binary might end up:
+  //   - /var/task/bin/ffmpeg  (Netlify Lambda root)
+  //   - ./bin/ffmpeg           (relative to CWD)
+  //   - /opt/bin/ffmpeg        (Lambda layer)
+  const projectPaths = [
+    '/var/task/bin/ffmpeg',
+    join(process.cwd(), 'bin', 'ffmpeg'),
     '/opt/bin/ffmpeg',
   ];
-  for (const p of systemPaths) {
+  for (const p of projectPaths) {
+    triedPaths.push(p);
     if (existsSync(p)) {
-      console.log('[ffmpeg] Using system ffmpeg at:', p);
-      return p;
+      makeExecutable(p);
+      if (isExecutable(p)) {
+        console.log('[ffmpeg] Using project ffmpeg at:', p);
+        return p;
+      }
     }
   }
 
-  // 2. Try ffmpeg-static as a fallback (for environments without system ffmpeg).
+  // 2. Try common system locations.
+  const systemPaths = [
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+  ];
+  for (const p of systemPaths) {
+    triedPaths.push(p);
+    if (existsSync(p)) {
+      if (isExecutable(p)) {
+        console.log('[ffmpeg] Using system ffmpeg at:', p);
+        return p;
+      }
+      makeExecutable(p);
+      if (isExecutable(p)) {
+        console.log('[ffmpeg] Using system ffmpeg at:', p, '(after chmod)');
+        return p;
+      }
+    }
+  }
+
+  // 3. Try ffmpeg-static as a fallback.
   try {
-    // Use dynamic require so esbuild leaves this as an external import.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegStatic = require('ffmpeg-static');
-    if (ffmpegStatic && typeof ffmpegStatic === 'string' && existsSync(ffmpegStatic)) {
-      console.log('[ffmpeg] Using ffmpeg-static binary at:', ffmpegStatic);
-      return ffmpegStatic;
+    if (ffmpegStatic && typeof ffmpegStatic === 'string') {
+      triedPaths.push(`ffmpeg-static → ${ffmpegStatic}`);
+      if (existsSync(ffmpegStatic)) {
+        makeExecutable(ffmpegStatic);
+        if (isExecutable(ffmpegStatic)) {
+          console.log('[ffmpeg] Using ffmpeg-static at:', ffmpegStatic);
+          return ffmpegStatic;
+        }
+      }
     }
-    // ffmpeg-static may return a path that doesn't exist on this platform.
-    console.warn('[ffmpeg] ffmpeg-static returned a path but file does not exist:', ffmpegStatic);
   } catch (err) {
     console.warn('[ffmpeg] Could not load ffmpeg-static:', (err as Error).message);
   }
 
-  // 3. Return null — let fluent-ffmpeg try the PATH.
-  console.warn('[ffmpeg] No ffmpeg binary found via system paths or ffmpeg-static. Trying PATH...');
+  // 4. Try `which ffmpeg` (PATH lookup).
+  try {
+    const which = execSync('which ffmpeg 2>/dev/null', { encoding: 'utf8' }).trim();
+    if (which) {
+      triedPaths.push(`which → ${which}`);
+      if (isExecutable(which)) {
+        console.log('[ffmpeg] Using ffmpeg from PATH at:', which);
+        return which;
+      }
+    }
+  } catch {
+    // ffmpeg not on PATH.
+  }
+
+  console.error('[ffmpeg] No ffmpeg binary found. Tried:');
+  triedPaths.forEach((p) => console.error(`  - ${p}`));
+
   return null;
 }
 
 // Resolve and set the ffmpeg path at module load time.
 const resolvedFfmpegPath = resolveFfmpegPath();
 if (resolvedFfmpegPath) {
-  // On Netlify, the binary may lose its executable permission during bundling.
-  // Try to chmod it to be safe (best-effort — may fail if read-only filesystem).
-  try {
-    chmodSync(resolvedFfmpegPath, 0o755);
-    console.log('[ffmpeg] Set executable permission on:', resolvedFfmpegPath);
-  } catch (chmodErr) {
-    console.warn('[ffmpeg] Could not chmod (may already be executable):', (chmodErr as Error).message);
-  }
   ffmpeg.setFfmpegPath(resolvedFfmpegPath);
+} else {
+  console.error('[ffmpeg] WARNING: No ffmpeg binary available. Audio/frame extraction will fail.');
 }
 
 const TMP_DIR = tmpdir();
@@ -90,6 +153,13 @@ async function ensureDir(path: string): Promise<void> {
   } catch {
     // Ignore if it already exists.
   }
+}
+
+/**
+ * Get the resolved ffmpeg path (for debugging/inspection).
+ */
+export function getFfmpegPath(): string | null {
+  return resolvedFfmpegPath;
 }
 
 /**
@@ -108,7 +178,6 @@ export async function downloadVideo(
 
   const response = await fetch(videoUrl, {
     headers: {
-      // Some CDNs require a user agent.
       'User-Agent':
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
@@ -140,7 +209,6 @@ export async function downloadVideo(
     });
     receivedBytes += value.length;
 
-    // Report progress every ~10% or every 1MB.
     if (totalBytes > 0) {
       const percent = Math.floor((receivedBytes / totalBytes) * 100);
       if (percent >= lastProgressUpdate + 10) {
@@ -175,26 +243,29 @@ export async function extractAudio(
   // Pre-check: verify ffmpeg is available before starting.
   if (!resolvedFfmpegPath) {
     throw new Error(
-      'ffmpeg binary not found. The ffmpeg-static package should provide one, ' +
-        'but it may not be included in the Netlify function bundle. ' +
-        'Check that netlify.toml includes "ffmpeg-static" in both ' +
-        'external_node_modules and included_files.',
+      'ffmpeg binary not found. Tried: /usr/bin/ffmpeg, /usr/local/bin/ffmpeg, ' +
+        '/opt/bin/ffmpeg, @ffmpeg-installer/ffmpeg, ffmpeg-static, and PATH lookup. ' +
+        'None were available in the Netlify function environment. ' +
+        'Check the function logs for "[ffmpeg]" messages to see what was tried.',
     );
   }
 
   const audioPath = videoPath.replace(/\.mp4$/, '.mp3');
-  onProgress?.('Extracting audio track with ffmpeg...');
+  onProgress?.(`Extracting audio with ffmpeg (${resolvedFfmpegPath})...`);
 
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
       .outputOptions([
-        '-vn', // no video
+        '-vn',
         '-acodec', 'libmp3lame',
-        '-ar', '16000', // 16kHz sample rate (Whisper)
-        '-ac', '1', // mono
-        '-b:a', '32k', // low bitrate is fine for speech
+        '-ar', '16000',
+        '-ac', '1',
+        '-b:a', '32k',
       ])
       .output(audioPath)
+      .on('start', (commandLine) => {
+        console.log('[ffmpeg] Running command:', commandLine);
+      })
       .on('end', () => {
         onProgress?.('Audio extraction complete.');
         resolve(audioPath);
@@ -208,8 +279,6 @@ export async function extractAudio(
 
 /**
  * Extract frames from a video at a fixed interval.
- *
- * @returns Array of { path, timestamp } for each extracted frame.
  */
 export async function extractFrames(
   videoPath: string,
@@ -222,7 +291,6 @@ export async function extractFrames(
 
   onProgress?.(`Extracting frames every ${intervalSeconds}s...`);
 
-  // First, get the video duration so we can cap the number of frames.
   const duration = await getVideoDuration(videoPath);
   const estimatedFrames = Math.floor(duration / intervalSeconds) + 1;
   const actualMaxFrames = Math.min(maxFrames, estimatedFrames);
@@ -238,7 +306,6 @@ export async function extractFrames(
       ])
       .output(`${framesDir}/frame_%04d.jpg`)
       .on('end', async () => {
-        // List the generated frames.
         const files = await fs.readdir(framesDir);
         const jpgFiles = files.filter((f) => f.endsWith('.jpg')).sort();
         for (let i = 0; i < jpgFiles.length; i++) {

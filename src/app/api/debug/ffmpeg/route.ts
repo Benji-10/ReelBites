@@ -1,132 +1,194 @@
 /**
  * GET /api/debug/ffmpeg
  *
- * Debug endpoint that checks whether ffmpeg is available in the Netlify
- * function environment. Useful for diagnosing "ffmpeg binary not found" errors.
- *
+ * Comprehensive debug endpoint for diagnosing ffmpeg issues on Netlify.
  * Returns:
- *   - Whether ffmpeg-static is installed and where
- *   - Whether the binary file exists on disk
- *   - The binary's file size and permissions
- *   - Whether system ffmpeg is available
+ *   - All ffmpeg binary sources tried and their status
  *   - The resolved ffmpeg path
+ *   - Environment info (Lambda runtime, tmp dir, etc.)
+ *   - Whether ffmpeg can actually execute (runs `ffmpeg -version`)
+ *
+ * Visit this endpoint at https://your-site.netlify.app/api/debug/ffmpeg
+ * to see exactly what's happening in the function environment.
  */
 
 import { NextResponse } from 'next/server';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, accessSync, constants } from 'fs';
 import { execSync } from 'child_process';
-import { tmpdir } from 'os';
+import { tmpdir, platform, arch } from 'os';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tryExec(cmd: string): { success: boolean; output: string; error?: string } {
+  try {
+    const output = execSync(cmd, { encoding: 'utf8', timeout: 5000 });
+    return { success: true, output: output.trim() };
+  } catch (err) {
+    return { success: false, output: '', error: (err as Error).message };
+  }
+}
+
 export async function GET() {
-  const debug: {
+  const results: {
+    environment: {
+      platform: string;
+      arch: string;
+      nodeVersion: string;
+      tmpDir: string;
+      cwd: string;
+      path: string;
+      isLambda: boolean;
+      isNetlify: boolean;
+    };
+    systemPaths: Array<{ path: string; exists: boolean; isExecutable: boolean; size?: number }>;
     ffmpegStatic: {
       loaded: boolean;
       path: string | null;
       exists: boolean;
-      size?: number;
-      mode?: string;
-      isExecutable?: boolean;
+      isExecutable: boolean;
       error?: string;
     };
-    systemFfmpeg: {
+    ffmpegInstaller: {
+      loaded: boolean;
       path: string | null;
       version: string | null;
+      exists: boolean;
+      isExecutable: boolean;
+      error?: string;
     };
+    whichFfmpeg: { success: boolean; path: string | null; error?: string };
+    ffmpegVersion: { success: boolean; output: string | null; error?: string };
     resolvedPath: string | null;
-    tmpDir: string;
-    env: {
-      NODE_ENV: string;
-      AWS_LAMBDA_FUNCTION_NAME?: string;
-      NETLIFY?: string;
-    };
+    allTriedPaths: string[];
   } = {
+    environment: {
+      platform: platform(),
+      arch: arch(),
+      nodeVersion: process.version,
+      tmpDir: tmpdir(),
+      cwd: process.cwd(),
+      path: process.env.PATH || '(not set)',
+      isLambda: !!process.env.AWS_LAMBDA_FUNCTION_NAME,
+      isNetlify: !!process.env.NETLIFY,
+    },
+    systemPaths: [],
     ffmpegStatic: {
       loaded: false,
       path: null,
       exists: false,
+      isExecutable: false,
     },
-    systemFfmpeg: {
+    ffmpegInstaller: {
+      loaded: false,
       path: null,
       version: null,
+      exists: false,
+      isExecutable: false,
     },
+    whichFfmpeg: { success: false, path: null },
+    ffmpegVersion: { success: false, output: null },
     resolvedPath: null,
-    tmpDir: '',
-    env: {
-      NODE_ENV: process.env.NODE_ENV || 'unknown',
-    },
+    allTriedPaths: [],
   };
 
-  // Check ffmpeg-static.
+  // 1. Check system paths.
+  const systemPaths = [
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/opt/bin/ffmpeg',
+    '/var/task/bin/ffmpeg',
+    '/var/task/node_modules/@ffmpeg-installer/linux-x64/ffmpeg',
+  ];
+  for (const p of systemPaths) {
+    const entry = { path: p, exists: false, isExecutable: false, size: undefined as number | undefined };
+    results.allTriedPaths.push(p);
+    if (existsSync(p)) {
+      entry.exists = true;
+      try {
+        const stats = statSync(p);
+        entry.size = stats.size;
+        entry.isExecutable = isExecutable(p);
+        if (entry.isExecutable && !results.resolvedPath) {
+          results.resolvedPath = p;
+        }
+      } catch {
+        // stat failed.
+      }
+    }
+    results.systemPaths.push(entry);
+  }
+
+  // 2. Check ffmpeg-static.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegStatic = require('ffmpeg-static');
-    debug.ffmpegStatic.loaded = true;
-    debug.ffmpegStatic.path = ffmpegStatic;
-
+    results.ffmpegStatic.loaded = true;
+    results.ffmpegStatic.path = ffmpegStatic;
+    results.allTriedPaths.push(`ffmpeg-static → ${ffmpegStatic}`);
     if (ffmpegStatic && typeof ffmpegStatic === 'string') {
-      debug.ffmpegStatic.exists = existsSync(ffmpegStatic);
-      if (debug.ffmpegStatic.exists) {
-        const stats = statSync(ffmpegStatic);
-        debug.ffmpegStatic.size = stats.size;
-        debug.ffmpegStatic.mode = (stats.mode & 0o777).toString(8);
-        debug.ffmpegStatic.isExecutable = (stats.mode & 0o111) !== 0;
-        debug.resolvedPath = ffmpegStatic;
+      results.ffmpegStatic.exists = existsSync(ffmpegStatic);
+      if (results.ffmpegStatic.exists) {
+        results.ffmpegStatic.isExecutable = isExecutable(ffmpegStatic);
+        if (results.ffmpegStatic.isExecutable && !results.resolvedPath) {
+          results.resolvedPath = ffmpegStatic;
+        }
       }
     }
   } catch (err) {
-    debug.ffmpegStatic.error = (err as Error).message;
+    results.ffmpegStatic.error = (err as Error).message;
   }
 
-  // Check system ffmpeg.
-  const systemPaths = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/bin/ffmpeg'];
-  for (const p of systemPaths) {
-    if (existsSync(p)) {
-      debug.systemFfmpeg.path = p;
-      try {
-        debug.systemFfmpeg.version = execSync(`${p} -version`, { encoding: 'utf8' })
-          .split('\n')[0]
-          .trim();
-      } catch {
-        debug.systemFfmpeg.version = '(could not get version)';
-      }
-      if (!debug.resolvedPath) {
-        debug.resolvedPath = p;
-      }
-      break;
-    }
-  }
-
-  // Check if ffmpeg is on PATH.
-  if (!debug.systemFfmpeg.path) {
-    try {
-      const which = execSync('which ffmpeg', { encoding: 'utf8' }).trim();
-      if (which) {
-        debug.systemFfmpeg.path = which;
-        debug.systemFfmpeg.version = execSync('ffmpeg -version', { encoding: 'utf8' })
-          .split('\n')[0]
-          .trim();
-        if (!debug.resolvedPath) {
-          debug.resolvedPath = which;
+  // 3. Check @ffmpeg-installer/ffmpeg.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    results.ffmpegInstaller.loaded = true;
+    results.ffmpegInstaller.path = ffmpegInstaller?.path || null;
+    results.ffmpegInstaller.version = ffmpegInstaller?.version || null;
+    results.allTriedPaths.push(`@ffmpeg-installer → ${ffmpegInstaller?.path}`);
+    if (ffmpegInstaller?.path && typeof ffmpegInstaller.path === 'string') {
+      results.ffmpegInstaller.exists = existsSync(ffmpegInstaller.path);
+      if (results.ffmpegInstaller.exists) {
+        results.ffmpegInstaller.isExecutable = isExecutable(ffmpegInstaller.path);
+        if (results.ffmpegInstaller.isExecutable && !results.resolvedPath) {
+          results.resolvedPath = ffmpegInstaller.path;
         }
       }
-    } catch {
-      // ffmpeg not on PATH.
     }
+  } catch (err) {
+    results.ffmpegInstaller.error = (err as Error).message;
   }
 
-  // Temp directory.
-  debug.tmpDir = tmpdir();
-
-  // Environment.
-  if (process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    debug.env.AWS_LAMBDA_FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
+  // 4. Try `which ffmpeg`.
+  const whichResult = tryExec('which ffmpeg 2>/dev/null');
+  results.whichFfmpeg = {
+    success: whichResult.success,
+    path: whichResult.success ? whichResult.output : null,
+    error: whichResult.error,
+  };
+  if (whichResult.success && whichResult.output && !results.resolvedPath) {
+    results.resolvedPath = whichResult.output;
   }
-  if (process.env.NETLIFY) {
-    debug.env.NETLIFY = process.env.NETLIFY;
+
+  // 5. Try running ffmpeg -version.
+  if (results.resolvedPath) {
+    const versionResult = tryExec(`${results.resolvedPath} -version`);
+    results.ffmpegVersion = {
+      success: versionResult.success,
+      output: versionResult.success ? versionResult.output.split('\n')[0] : null,
+      error: versionResult.error,
+    };
   }
 
-  return NextResponse.json(debug, { status: 200 });
+  return NextResponse.json(results, { status: 200 });
 }
