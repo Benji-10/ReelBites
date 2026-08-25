@@ -56,15 +56,42 @@ export async function runExtractionPipeline(
       onProgress({ step: 'scrape', message: msg, progress: 10 }),
     );
 
+    // Debug: log what the scraper returned so we can diagnose issues.
+    console.log('[Pipeline] Apify scrape result:', {
+      videoUrl: post.videoUrl ? `${post.videoUrl.slice(0, 80)}...` : null,
+      videoUrlLength: post.videoUrl?.length || 0,
+      captionLength: post.caption?.length || 0,
+      commentsCount: post.comments?.length || 0,
+      author: post.author,
+      shortCode: post.shortCode,
+      thumbnailUrl: post.thumbnailUrl ? '(present)' : null,
+    });
+
     if (!post.videoUrl) {
       throw new Error(
-        'No video URL found in the Instagram post. The post may not contain a video, or the Apify actor did not return one.',
+        'No video URL found in the Instagram post. The Apify actor returned: ' +
+          `caption=${post.caption ? `${post.caption.length} chars` : 'null'}, ` +
+          `comments=${post.comments?.length || 0}, ` +
+          `thumbnail=${post.thumbnailUrl ? 'present' : 'null'}. ` +
+          'The post may not contain a video, or the Apify actor did not return one. ' +
+          'Check the Apify dashboard at https://console.apify.com to see the raw output.',
+      );
+    }
+
+    // Validate the video URL looks reasonable.
+    try {
+      const parsed = new URL(post.videoUrl);
+      console.log('[Pipeline] Video URL is valid:', parsed.hostname, parsed.pathname.slice(0, 50));
+    } catch {
+      throw new Error(
+        `The scraper returned an invalid video URL: "${post.videoUrl.slice(0, 100)}". ` +
+          'This may indicate the Apify actor returned malformed data.',
       );
     }
 
     onProgress({
       step: 'scrape',
-      message: `Found video from @${post.author || 'unknown'}. Caption: ${post.caption?.slice(0, 80) || '(none)'}...`,
+      message: `Found video from @${post.author || 'unknown'} (${post.videoUrl.length} chars). Caption: ${post.caption?.slice(0, 60) || '(none)'}...`,
       progress: 20,
     });
 
@@ -78,6 +105,27 @@ export async function runExtractionPipeline(
     videoPath = await downloadVideo(post.videoUrl, (msg) =>
       onProgress({ step: 'download', message: msg, progress: 28 }),
     );
+
+    // Verify the video file was actually downloaded and has content.
+    const { stat } = await import('fs/promises');
+    try {
+      const videoStats = await stat(videoPath);
+      console.log('[Pipeline] Video downloaded:', {
+        path: videoPath,
+        sizeMB: (videoStats.size / 1024 / 1024).toFixed(2),
+      });
+      if (videoStats.size < 1000) {
+        throw new Error(
+          `Downloaded video file is only ${videoStats.size} bytes — the download may have failed. ` +
+            'The video URL may have expired or be rate-limited.',
+        );
+      }
+    } catch (statErr) {
+      throw new Error(
+        `Video file not found after download: ${(statErr as Error).message}. ` +
+          'This indicates the download step failed silently.',
+      );
+    }
 
     // Step 3: Extract audio.
     onProgress({

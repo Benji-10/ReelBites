@@ -14,7 +14,7 @@
  */
 
 import ffmpeg from 'fluent-ffmpeg';
-import { existsSync } from 'fs';
+import { existsSync, chmodSync } from 'fs';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -32,22 +32,10 @@ import { randomUUID } from 'crypto';
  * extraction to fail with a clear error message.
  */
 function resolveFfmpegPath(): string | null {
-  // 1. Try ffmpeg-static.
-  try {
-    // Use dynamic require so esbuild leaves this as an external import.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const ffmpegStatic = require('ffmpeg-static');
-    if (ffmpegStatic && typeof ffmpegStatic === 'string' && existsSync(ffmpegStatic)) {
-      console.log('[ffmpeg] Using ffmpeg-static binary at:', ffmpegStatic);
-      return ffmpegStatic;
-    }
-    // ffmpeg-static may return a path that doesn't exist yet on this platform.
-    console.warn('[ffmpeg] ffmpeg-static returned a path but file does not exist:', ffmpegStatic);
-  } catch (err) {
-    console.warn('[ffmpeg] Could not load ffmpeg-static:', (err as Error).message);
-  }
-
-  // 2. Try common system locations.
+  // 1. Try common system locations FIRST.
+  // On Netlify's AWS Lambda runtime, ffmpeg is often available at these paths.
+  // System ffmpeg is more reliable than ffmpeg-static because it doesn't have
+  // bundling/path-resolution issues.
   const systemPaths = [
     '/usr/bin/ffmpeg',
     '/usr/local/bin/ffmpeg',
@@ -60,14 +48,37 @@ function resolveFfmpegPath(): string | null {
     }
   }
 
+  // 2. Try ffmpeg-static as a fallback (for environments without system ffmpeg).
+  try {
+    // Use dynamic require so esbuild leaves this as an external import.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ffmpegStatic = require('ffmpeg-static');
+    if (ffmpegStatic && typeof ffmpegStatic === 'string' && existsSync(ffmpegStatic)) {
+      console.log('[ffmpeg] Using ffmpeg-static binary at:', ffmpegStatic);
+      return ffmpegStatic;
+    }
+    // ffmpeg-static may return a path that doesn't exist on this platform.
+    console.warn('[ffmpeg] ffmpeg-static returned a path but file does not exist:', ffmpegStatic);
+  } catch (err) {
+    console.warn('[ffmpeg] Could not load ffmpeg-static:', (err as Error).message);
+  }
+
   // 3. Return null — let fluent-ffmpeg try the PATH.
-  console.warn('[ffmpeg] No ffmpeg binary found via ffmpeg-static or system paths. Trying PATH...');
+  console.warn('[ffmpeg] No ffmpeg binary found via system paths or ffmpeg-static. Trying PATH...');
   return null;
 }
 
 // Resolve and set the ffmpeg path at module load time.
 const resolvedFfmpegPath = resolveFfmpegPath();
 if (resolvedFfmpegPath) {
+  // On Netlify, the binary may lose its executable permission during bundling.
+  // Try to chmod it to be safe (best-effort — may fail if read-only filesystem).
+  try {
+    chmodSync(resolvedFfmpegPath, 0o755);
+    console.log('[ffmpeg] Set executable permission on:', resolvedFfmpegPath);
+  } catch (chmodErr) {
+    console.warn('[ffmpeg] Could not chmod (may already be executable):', (chmodErr as Error).message);
+  }
   ffmpeg.setFfmpegPath(resolvedFfmpegPath);
 }
 

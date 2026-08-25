@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Instagram, Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,8 +15,35 @@ export function ExtractorView() {
     useStore();
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const isProcessing = extraction.status === 'processing';
+  // Keep the status visible while processing OR when it has failed/completed
+  // with data to show (logs, error). Only hide it when idle.
+  const showStatus =
+    isProcessing ||
+    (extraction.status === 'failed' && extraction.logs.length > 0) ||
+    (extraction.status === 'completed' && extraction.logs.length > 0);
+
+  // Listen for retry events from the LoadingStatus component.
+  useEffect(() => {
+    const handleRetry = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail) {
+        setUrl(detail);
+        // Reset the extraction state, then trigger a new extraction.
+        resetExtraction();
+        // Use a small timeout to let the state update before re-submitting.
+        setTimeout(() => {
+          if (formRef.current) {
+            formRef.current.requestSubmit();
+          }
+        }, 100);
+      }
+    };
+    window.addEventListener('retry-extraction', handleRetry);
+    return () => window.removeEventListener('retry-extraction', handleRetry);
+  }, [resetExtraction]);
 
   async function handleExtract(e: React.FormEvent) {
     e.preventDefault();
@@ -136,7 +163,7 @@ export function ExtractorView() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleExtract} className="space-y-4">
+          <form ref={formRef} onSubmit={handleExtract} className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-3">
               <Input
                 type="url"
@@ -177,11 +204,11 @@ export function ExtractorView() {
         </CardContent>
       </Card>
 
-      {/* Loading Status */}
-      {isProcessing && <LoadingStatus onCancel={handleCancel} />}
+      {/* Loading Status — stays visible on processing AND failed states */}
+      {showStatus && <LoadingStatus onCancel={handleCancel} />}
 
-      {/* How it works */}
-      {!isProcessing && (
+      {/* How it works — only show when idle (no processing, no error) */}
+      {!showStatus && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">How it works</CardTitle>
