@@ -1,12 +1,14 @@
 /**
- * Speech-to-text using HuggingFace's Inference API with OpenAI's Whisper model.
+ * Speech-to-text using Groq's Whisper API.
  *
- * The client extracts audio client-side (using ffmpeg.wasm) and uploads it
- * to the /api/transcribe endpoint, which calls this function.
+ * Groq offers a free, reliable Whisper API that's OpenAI-compatible.
+ * The free tier allows 14,400 requests/day and 200 requests/hour.
  *
- * DEBUG: This version includes detailed logging to diagnose "fetch failed"
- * errors. Once the issue is resolved, the console.log statements can be
- * removed (or left in — they don't affect functionality).
+ * Groq is used instead of HuggingFace because HuggingFace's
+ * api-inference.huggingface.co hostname has DNS resolution issues
+ * (ENOTFOUND) from Netlify Lambda functions.
+ *
+ * Get a free API key at: https://console.groq.com/keys
  */
 
 interface DebugLog {
@@ -40,7 +42,7 @@ export function clearDebugLogs(): void {
 }
 
 /**
- * Transcribe an audio buffer using Whisper via HuggingFace Inference API.
+ * Transcribe an audio buffer using Whisper via Groq's API.
  *
  * @param audioBuffer - The audio file as a Buffer (MP3, WAV, etc.)
  * @param mimeType - The MIME type of the audio (e.g. "audio/mpeg")
@@ -56,28 +58,28 @@ export async function transcribeAudioFromBuffer(
     mimeType,
   });
 
-  const token = process.env.HF_API_TOKEN;
+  const token = process.env.GROQ_API_KEY || process.env.HF_API_TOKEN;
   if (!token) {
-    log('error', 'HF_API_TOKEN is not set');
+    log('error', 'No API token set');
     throw new Error(
-      'HF_API_TOKEN is not set. Add it to your .env file or Netlify environment variables.',
+      'GROQ_API_KEY is not set. Get a free key at https://console.groq.com/keys ' +
+        'and add it to your Netlify environment variables.',
     );
   }
-  log('init', 'HF_API_TOKEN is set', { tokenLength: token.length, tokenPrefix: token.slice(0, 6) + '...' });
+  log('init', 'API token is set', {
+    tokenLength: token.length,
+    tokenPrefix: token.slice(0, 6) + '...',
+    provider: process.env.GROQ_API_KEY ? 'groq' : 'huggingface-fallback',
+  });
 
-  const model = process.env.WHISPER_MODEL || 'openai/whisper-large-v3';
-  const url = `https://api-inference.huggingface.co/models/${model}`;
-  log('init', 'Using model', { model, url });
+  const model = process.env.WHISPER_MODEL || 'whisper-large-v3';
+  const url = 'https://api.groq.com/openai/v1/audio/transcriptions';
+  log('init', 'Using Groq Whisper API', { model, url });
 
   // Validate the audio buffer.
   if (!audioBuffer || audioBuffer.length === 0) {
     log('error', 'Audio buffer is empty');
     throw new Error('Audio buffer is empty — the client sent no audio data.');
-  }
-
-  if (audioBuffer.length < 100) {
-    log('error', 'Audio buffer is suspiciously small', { size: audioBuffer.length });
-    throw new Error(`Audio buffer is only ${audioBuffer.length} bytes — the audio extraction may have failed.`);
   }
 
   log('init', 'Audio buffer validated', {
@@ -88,35 +90,72 @@ export async function transcribeAudioFromBuffer(
       .join(' '),
   });
 
+  // Build multipart/form-data manually (avoids FormData+Blob issues in Lambda).
+  const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
+  const filename = mimeType === 'audio/wav' ? 'audio.wav' : 'audio.mp3';
+
+  const parts: Buffer[] = [];
+
+  // Part: model
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
+    ),
+  );
+
+  // Part: response_format
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n`,
+    ),
+  );
+
+  // Part: file (the audio)
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
+    ),
+  );
+  parts.push(audioBuffer);
+  parts.push(Buffer.from('\r\n'));
+
+  // Closing boundary
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+  const body = Buffer.concat(parts);
+  log('init', 'Built multipart request', {
+    bodySize: body.length,
+    bodyKB: Math.round(body.length / 1024),
+  });
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     log(`attempt-${attempt + 1}`, 'Starting attempt', { attempt: attempt + 1, url });
 
     try {
-      // Set a timeout to detect hung connections.
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
-        log(`attempt-${attempt + 1}`, 'Request timed out after 60s, aborting...');
+        log(`attempt-${attempt + 1}`, 'Request timed out after 90s, aborting...');
         controller.abort();
-      }, 60000);
+      }, 90000);
 
-      log(`attempt-${attempt + 1}`, 'Sending fetch request to HuggingFace', {
+      log(`attempt-${attempt + 1}`, 'Sending fetch request to Groq', {
         method: 'POST',
         headers: {
-          Authorization: 'Bearer hf_...(hidden)',
-          'Content-Type': mimeType,
+          Authorization: 'Bearer gsk_...(hidden)',
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
         },
-        bodySize: audioBuffer.length,
+        bodySize: body.length,
       });
 
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': mimeType,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
         },
-        body: audioBuffer,
+        body,
         signal: controller.signal,
       });
 
@@ -125,17 +164,13 @@ export async function transcribeAudioFromBuffer(
       log(`attempt-${attempt + 1}`, 'Received response', {
         status: response.status,
         statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
       });
 
-      if (response.status === 503) {
-        // Model is loading. Wait and retry.
+      if (response.status === 429) {
+        // Rate limited.
         const retryAfter = response.headers.get('retry-after');
-        const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 15000;
-        log(`attempt-${attempt + 1}`, 'Model is loading, waiting before retry', {
-          retryAfterHeader: retryAfter,
-          waitMs,
-        });
+        const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 10000;
+        log(`attempt-${attempt + 1}`, 'Rate limited, waiting before retry', { waitMs });
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }
@@ -148,22 +183,17 @@ export async function transcribeAudioFromBuffer(
           errorBody: errorText.slice(0, 500),
         });
         throw new Error(
-          `HuggingFace API error: ${response.status} ${response.statusText} - ${errorText.slice(0, 200)}`,
+          `Groq API error: ${response.status} ${response.statusText} - ${errorText.slice(0, 200)}`,
         );
       }
 
       log(`attempt-${attempt + 1}`, 'Parsing JSON response');
-      const result = (await response.json()) as { text?: string; error?: string };
+      const result = (await response.json()) as { text?: string };
       log(`attempt-${attempt + 1}`, 'Parsed response', {
         hasText: !!result.text,
-        hasError: !!result.error,
         textLength: result.text?.length || 0,
         textPreview: result.text?.slice(0, 100),
       });
-
-      if (result.error) {
-        throw new Error(`HuggingFace returned an error in the response body: ${result.error}`);
-      }
 
       const text = result.text?.trim() || '';
       log('success', 'Transcription complete', {
@@ -177,19 +207,18 @@ export async function transcribeAudioFromBuffer(
       log(`attempt-${attempt + 1}`, 'Attempt failed', {
         name: error.name,
         message: error.message,
-        stack: error.stack?.split('\n').slice(0, 5).join('\n'),
         cause: (err as { cause?: { code?: string; message?: string } }).cause,
       });
       lastError = error;
 
-      // Don't retry on auth errors or client errors (4xx).
+      // Don't retry on auth errors.
       if (error.message.includes('401') || error.message.includes('403')) {
         log('error', 'Authentication error — not retrying');
         break;
       }
 
       if (attempt < 2) {
-        const waitMs = 5000 * (attempt + 1);
+        const waitMs = 3000 * (attempt + 1);
         log(`attempt-${attempt + 1}`, 'Waiting before retry', { waitMs });
         await new Promise((r) => setTimeout(r, waitMs));
       }
@@ -199,30 +228,13 @@ export async function transcribeAudioFromBuffer(
   log('error', 'All attempts failed', {
     lastErrorName: lastError?.name,
     lastErrorMessage: lastError?.message,
-    allLogs: getDebugLogs().map((l) => `${l.step}: ${l.message}`),
   });
-
-  // Build a detailed error message.
-  const errorDetails = {
-    error: lastError?.message || 'Unknown error',
-    model,
-    url,
-    audioSizeBytes: audioBuffer.length,
-    attempts: 3,
-    debugLogs: getDebugLogs().map((l) => ({
-      step: l.step,
-      message: l.message,
-    })),
-  };
 
   throw new Error(
     `Whisper transcription failed after 3 attempts. ` +
       `Last error: ${lastError?.message}. ` +
-      `This could be caused by: ` +
-      `(1) HuggingFace API rate limiting or downtime, ` +
-      `(2) Invalid HF_API_TOKEN, ` +
-      `(3) Network connectivity issues from the Netlify function to HuggingFace, ` +
-      `(4) The audio format being unsupported. ` +
-      `Debug details: ${JSON.stringify(errorDetails, null, 2)}`,
+      `If the error is "fetch failed" with ENOTFOUND, this is a DNS issue. ` +
+      `Groq's API should be reachable from Netlify. Verify your GROQ_API_KEY ` +
+      `at https://console.groq.com/keys and check the model name.`,
   );
 }

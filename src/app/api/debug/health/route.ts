@@ -26,13 +26,13 @@ export async function GET() {
       APIFY_API_TOKEN: !!process.env.APIFY_API_TOKEN,
       GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
       GEMINI_MODEL: process.env.GEMINI_MODEL || '(not set, using default)',
-      HF_API_TOKEN: !!process.env.HF_API_TOKEN,
+      GROQ_API_KEY: !!process.env.GROQ_API_KEY,
       WHISPER_MODEL: process.env.WHISPER_MODEL || '(not set, using default)',
       NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
     },
     endpoints: {
       scrape: 'POST /api/scrape — Calls Apify to get video URL, caption, comments',
-      transcribe: 'POST /api/transcribe — Calls HuggingFace Whisper with base64 audio',
+      transcribe: 'POST /api/transcribe — Calls Groq Whisper with base64 audio',
       generate: 'POST /api/generate — Calls Gemini to generate the recipe',
       recipes: 'GET/POST /api/recipes — List or create recipes in Neon DB',
       recipe: 'GET/PUT/DELETE /api/recipes/:id — Manage a single recipe',
@@ -44,7 +44,7 @@ export async function GET() {
     checks.envVars.DATABASE_URL &&
     checks.envVars.APIFY_API_TOKEN &&
     checks.envVars.GEMINI_API_KEY &&
-    checks.envVars.HF_API_TOKEN;
+    checks.envVars.GROQ_API_KEY;
 
   return NextResponse.json(
     { ...checks, allConfigured },

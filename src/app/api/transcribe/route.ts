@@ -72,24 +72,16 @@ export async function POST(request: NextRequest) {
     let hint = '';
     if (message.includes('fetch failed')) {
       hint =
-        'The "fetch failed" error usually means a network connectivity issue. ' +
-        'This is commonly caused by: (1) HuggingFace API being temporarily down, ' +
-        '(2) The HF_API_TOKEN being invalid or expired, ' +
-        '(3) DNS resolution failing from the Netlify Lambda function, ' +
-        '(4) The audio payload being too large for the function memory limit. ' +
-        'Check your HF_API_TOKEN at https://huggingface.co/settings/tokens and ' +
-        'verify the model is available at https://huggingface.co/openai/whisper-large-v3';
+        'The "fetch failed" error usually means a network/DNS issue. ' +
+        'Groq\'s API should be reachable from Netlify. If you still see ENOTFOUND, ' +
+        'verify your GROQ_API_KEY is set at https://console.groq.com/keys';
     } else if (message.includes('401') || message.includes('403')) {
       hint =
-        'Authentication failed. Your HF_API_TOKEN may be invalid or expired. ' +
-        'Generate a new one at https://huggingface.co/settings/tokens';
-    } else if (message.includes('503')) {
-      hint =
-        'The Whisper model is loading on HuggingFace. This is normal for the ' +
-        'first request after inactivity. Try again in 30 seconds.';
+        'Authentication failed. Your GROQ_API_KEY may be invalid or expired. ' +
+        'Generate a new one at https://console.groq.com/keys';
     } else if (message.includes('429')) {
       hint =
-        'Rate limited. HuggingFace free tier has request limits. ' +
+        'Rate limited. Groq free tier allows 200 requests/hour. ' +
         'Wait a minute and try again.';
     }
 
@@ -120,12 +112,13 @@ export async function GET() {
       mimeType: 'audio/mpeg (optional)',
     },
     config: {
-      hasHfToken: !!process.env.HF_API_TOKEN,
-      whisperModel: process.env.WHISPER_MODEL || 'openai/whisper-large-v3',
+      hasGroqKey: !!process.env.GROQ_API_KEY,
+      groqApiKeyPrefix: process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.slice(0, 6) + '...' : null,
+      whisperModel: process.env.WHISPER_MODEL || 'whisper-large-v3',
       maxDuration: 120,
     },
     hint:
-      'To test: POST a base64-encoded MP3 audio to this endpoint. ' +
-      'Visit https://huggingface.co/openai/whisper-large-v3 to verify the model is available.',
+      'Get a free Groq API key at https://console.groq.com/keys. ' +
+      'Set it as GROQ_API_KEY in your Netlify environment variables.',
   });
 }
