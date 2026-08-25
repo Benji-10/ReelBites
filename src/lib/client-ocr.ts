@@ -6,9 +6,29 @@
  *
  * For each frame extracted from the video, we run OCR and collect any text
  * that appears on screen (ingredient lists, timers, step labels, etc.).
+ *
+ * IMPORTANT: The frame data comes from ffmpeg.wasm, which returns Uint8Arrays
+ * backed by the WASM heap. When these are passed to Tesseract's worker via
+ * postMessage, the ArrayBuffer gets TRANSFERRED (detached), making it
+ * unusable. We must copy each frame's data into a fresh ArrayBuffer before
+ * creating the Blob.
  */
 
 import Tesseract from 'tesseract.js';
+
+/**
+ * Copy a Uint8Array into a fresh ArrayBuffer.
+ *
+ * This is necessary because ffmpeg.wasm returns Uint8Arrays that share
+ * memory with the WASM heap. Passing these directly to a Web Worker via
+ * postMessage (which Tesseract does internally) transfers the ArrayBuffer,
+ * detaching it from the original Uint8Array.
+ */
+function copyToFreshBuffer(data: Uint8Array): Uint8Array {
+  const copy = new Uint8Array(data.length);
+  copy.set(data);
+  return copy;
+}
 
 /**
  * Run OCR on a list of video frames.
@@ -29,6 +49,16 @@ export async function ocrFrames(
 
   onProgress?.(`Running OCR on ${frames.length} frames (language: ${lang})...`);
 
+  // Pre-copy all frame data into fresh ArrayBuffers BEFORE creating the worker.
+  // This prevents the "ArrayBuffer is detached" error when Tesseract's worker
+  // tries to read the data.
+  const safeFrames = frames.map((f) => ({
+    data: copyToFreshBuffer(f.data),
+    timestamp: f.timestamp,
+  }));
+
+  onProgress?.('Initializing Tesseract worker...');
+
   // Create a single worker and reuse it for all frames.
   const worker = await Tesseract.createWorker(lang, 1, {
     logger: (m) => {
@@ -42,13 +72,15 @@ export async function ocrFrames(
   const textParts: string[] = [];
 
   try {
-    for (let i = 0; i < frames.length; i++) {
-      const frame = frames[i];
-      onProgress?.(`OCR frame ${i + 1}/${frames.length} (t=${frame.timestamp}s)...`);
+    for (let i = 0; i < safeFrames.length; i++) {
+      const frame = safeFrames[i];
+      onProgress?.(`OCR frame ${i + 1}/${safeFrames.length} (t=${frame.timestamp}s)...`);
 
       try {
-        // Convert Uint8Array to Blob for Tesseract.
-        const blob = new Blob([frame.data], { type: 'image/jpeg' });
+        // Create a fresh copy for this iteration (the Blob may also transfer
+        // the buffer when passed to the worker).
+        const frameCopy = copyToFreshBuffer(frame.data);
+        const blob = new Blob([frameCopy], { type: 'image/jpeg' });
         const { data } = await worker.recognize(blob);
         const text = (data.text || '').trim();
 
@@ -57,6 +89,7 @@ export async function ocrFrames(
         }
       } catch (err) {
         console.error(`OCR failed for frame ${i}:`, err);
+        // Continue to next frame even if this one failed.
       }
     }
   } finally {

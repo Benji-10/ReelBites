@@ -160,8 +160,13 @@ export async function extractAudio(
     // Best-effort cleanup.
   }
 
+  // Copy the data out of the WASM heap into a fresh ArrayBuffer.
+  // (Same reason as extractFrames — the WASM-backed buffer can cause issues.)
+  const rawAudio = audioData as Uint8Array;
+  const audioBytes = new Uint8Array(rawAudio.length);
+  audioBytes.set(rawAudio);
+
   // Convert to base64 for upload.
-  const audioBytes = audioData as Uint8Array;
   let binary = '';
   const chunkSize = 8192;
   for (let i = 0; i < audioBytes.length; i += chunkSize) {
@@ -212,8 +217,17 @@ export async function extractFrames(
     try {
       const data = await ffmpeg.readFile(filename);
       if (data && (data as Uint8Array).length > 0) {
+        const rawData = data as Uint8Array;
+        // CRITICAL: Copy the data out of the WASM heap into a fresh ArrayBuffer.
+        // ffmpeg.wasm's readFile returns a Uint8Array backed by the WASM memory
+        // buffer. If we pass this directly to another Web Worker (like
+        // Tesseract.js), the ArrayBuffer gets TRANSFERRED (detached) and becomes
+        // unusable, causing "Failed to execute 'postMessage' on 'Worker':
+        // An ArrayBuffer is detached and could not be cloned."
+        const copy = new Uint8Array(rawData.length);
+        copy.set(rawData);
         frames.push({
-          data: data as Uint8Array,
+          data: copy,
           timestamp: (i - 1) * intervalSeconds,
         });
       }
