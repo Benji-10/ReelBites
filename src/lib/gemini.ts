@@ -50,13 +50,14 @@ function buildPrompt(args: {
   return `You are a professional recipe extractor. Your job is to read a recipe from an Instagram reel and output a structured JSON recipe object.
 
 CRITICAL RULES — FOLLOW THESE EXACTLY:
-1. Use ONLY information that is actually present in the sources below. Do NOT invent amounts, temperatures, times, or ingredients.
-2. If an ingredient is mentioned but its amount is NOT specified, set "amount" to null and add a flag of type "missing_amount".
+1. Use information from the sources below. If an amount is specified, use it exactly.
+2. If an ingredient is mentioned but its amount is NOT specified, MAKE UP a realistic quantity based on your cooking knowledge (e.g. "salt" → 1 tsp, "olive oil" → 2 tbsp, "onion" → 1). Set "flag" to "estimated_amount" to indicate it was estimated, not from the source.
 3. If a step is vague (e.g. "cook until done" with no time), include it but add a flag of type "vague_instruction".
-4. For EVERY ingredient, instruction, and metadata field, include an "evidence" string that cites which source the info came from: "caption", "transcript", "ocr", or "comments".
+4. For EVERY ingredient, instruction, and metadata field, include an "evidence" string that cites which source the info came from: "caption", "transcript", "ocr", "comments", or "estimated".
 5. If the reel is NOT a recipe (e.g. it's a lifestyle video, an ad, etc.), still output the JSON but set title to "Not a recipe" and add a flag of type "not_a_recipe".
 6. Do NOT include units in the "amount" field — put the unit in "unit". E.g. { amount: "2", unit: "cups" }, not { amount: "2 cups" }.
-7. Return ONLY the JSON object, no markdown fences, no preamble.
+7. Amount should be a number or simple fraction (e.g. "2", "0.5", "1.5"). Unit should be standard (cups, tbsp, tsp, oz, g, ml, pieces, cloves, etc.).
+8. Return ONLY the JSON object, no markdown fences, no preamble.
 
 SOURCES:
 

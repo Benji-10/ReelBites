@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, X, Maximize2, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EvidenceTooltip } from './evidence-tooltip';
 import type { RecipeInstruction } from '@/lib/types';
@@ -14,25 +14,15 @@ interface CookingModeProps {
 
 export function CookingMode({ instructions, title, onClose }: CookingModeProps) {
   const [currentStep, setCurrentStep] = useState(0);
-  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
 
   const step = instructions[currentStep];
   const isLastStep = currentStep === instructions.length - 1;
-  const isCompleted = completedSteps.has(currentStep);
-
-  function toggleCompleted() {
-    const next = new Set(completedSteps);
-    if (next.has(currentStep)) {
-      next.delete(currentStep);
-    } else {
-      next.add(currentStep);
-    }
-    setCompletedSteps(next);
-  }
 
   function next() {
     if (!isLastStep) {
       setCurrentStep(currentStep + 1);
+    } else {
+      onClose();
     }
   }
 
@@ -68,11 +58,6 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
         <span className="font-medium text-foreground">Step {currentStep + 1}</span>
         <span>of</span>
         <span>{instructions.length}</span>
-        {completedSteps.size > 0 && (
-          <span className="ml-2 text-xs">
-            ({completedSteps.size} completed)
-          </span>
-        )}
       </div>
 
       {/* Main content — the instruction */}
@@ -88,7 +73,9 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
             <EvidenceTooltip evidence={step.evidence} flag={step.flag} />
             {step.flag && (
               <span className="text-xs text-amber-500">
-                {step.flag === 'missing_amount' ? 'Estimated' : 'May need verification'}
+                {step.flag === 'estimated_amount' || step.flag === 'missing_amount'
+                  ? 'Estimated'
+                  : 'May need verification'}
               </span>
             )}
           </div>
@@ -102,46 +89,28 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
             variant="outline"
             onClick={prev}
             disabled={currentStep === 0}
-            className="gap-1.5"
+            className="gap-1.5 flex-1 sm:flex-none"
           >
             <ChevronLeft className="h-4 w-4" />
             Previous
           </Button>
 
-          <Button
-            variant={isCompleted ? 'default' : 'outline'}
-            onClick={toggleCompleted}
-            className="gap-1.5"
-          >
-            <Check className="h-4 w-4" />
-            {isCompleted ? 'Completed' : 'Mark complete'}
+          <Button onClick={next} className="gap-1.5 flex-1 sm:flex-none">
+            {isLastStep ? 'Finish' : 'Next'}
+            <ChevronRight className="h-4 w-4" />
           </Button>
-
-          {isLastStep ? (
-            <Button onClick={onClose} className="gap-1.5">
-              <Check className="h-4 w-4" />
-              Finish
-            </Button>
-          ) : (
-            <Button onClick={next} className="gap-1.5">
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          )}
         </div>
 
-        {/* Step dots */}
-        <div className="flex items-center justify-center gap-1.5">
+        {/* Step dots — scrollable on mobile */}
+        <div className="flex items-center justify-center gap-1.5 overflow-x-auto custom-scrollbar pb-1">
           {instructions.map((_, i) => (
             <button
               key={i}
               onClick={() => setCurrentStep(i)}
-              className={`h-2 rounded-full transition-all ${
+              className={`h-2 rounded-full transition-all shrink-0 ${
                 i === currentStep
                   ? 'w-8 bg-primary'
-                  : completedSteps.has(i)
-                    ? 'w-2 bg-primary/40'
-                    : 'w-2 bg-muted-foreground/30'
+                  : 'w-2 bg-muted-foreground/30'
               }`}
               aria-label={`Go to step ${i + 1}`}
             />

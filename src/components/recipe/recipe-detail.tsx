@@ -50,6 +50,7 @@ export function RecipeDetail() {
 
   // Recipe scaling state.
   const [scaleFactor, setScaleFactor] = useState(1);
+  const [unitSystem, setUnitSystem] = useState<'metric' | 'imperial'>('metric');
 
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
@@ -114,8 +115,67 @@ export function RecipeDetail() {
     const num = parseFloat(amount);
     if (isNaN(num)) return amount;
     const scaled = num * scaleFactor;
-    // Format nicely — avoid floating point issues.
     return scaled % 1 === 0 ? scaled.toString() : scaled.toFixed(2).replace(/\.?0+$/, '');
+  }
+
+  // Unit conversion tables (no AI — pure math).
+  const IMPERIAL_TO_METRIC: Record<string, { factor: number; unit: string }> = {
+    'cup': { factor: 240, unit: 'ml' },
+    'cups': { factor: 240, unit: 'ml' },
+    'tbsp': { factor: 15, unit: 'ml' },
+    'tablespoon': { factor: 15, unit: 'ml' },
+    'tablespoons': { factor: 15, unit: 'ml' },
+    'tsp': { factor: 5, unit: 'ml' },
+    'teaspoon': { factor: 5, unit: 'ml' },
+    'teaspoons': { factor: 5, unit: 'ml' },
+    'oz': { factor: 28.35, unit: 'g' },
+    'ounce': { factor: 28.35, unit: 'g' },
+    'ounces': { factor: 28.35, unit: 'g' },
+    'lb': { factor: 453.6, unit: 'g' },
+    'lbs': { factor: 453.6, unit: 'g' },
+    'pound': { factor: 453.6, unit: 'g' },
+    'pounds': { factor: 453.6, unit: 'g' },
+  };
+
+  const METRIC_TO_IMPERIAL: Record<string, { factor: number; unit: string }> = {
+    'ml': { factor: 0.0042, unit: 'cups' },
+    'g': { factor: 0.0353, unit: 'oz' },
+    'kg': { factor: 2.205, unit: 'lb' },
+    'l': { factor: 4.227, unit: 'cups' },
+  };
+
+  function convertUnit(amount: string | null | undefined, unit: string | null | undefined): { amount: string; unit: string } {
+    if (!amount || !unit) return { amount: amount || '', unit: unit || '' };
+    const num = parseFloat(amount);
+    if (isNaN(num)) return { amount, unit };
+
+    const normalizedUnit = unit.toLowerCase().trim();
+
+    if (unitSystem === 'metric') {
+      // Convert imperial → metric
+      const conv = IMPERIAL_TO_METRIC[normalizedUnit];
+      if (conv) {
+        const converted = num * conv.factor;
+        const formatted = converted >= 100 ? Math.round(converted).toString() : converted.toFixed(1).replace(/\.0$/, '');
+        return { amount: formatted, unit: conv.unit };
+      }
+    } else {
+      // Convert metric → imperial
+      const conv = METRIC_TO_IMPERIAL[normalizedUnit];
+      if (conv) {
+        const converted = num * conv.factor;
+        const formatted = converted < 1 ? converted.toFixed(2).replace(/\.?0+$/, '') : converted.toFixed(1).replace(/\.0$/, '');
+        return { amount: formatted, unit: conv.unit };
+      }
+    }
+
+    return { amount, unit };
+  }
+
+  function getDisplayAmount(ing: RecipeIngredient): { amount: string; unit: string } {
+    const scaled = scaleAmount(ing.amount);
+    const converted = convertUnit(scaled, ing.unit);
+    return converted;
   }
 
   function toggleEdit(section: string) {
@@ -393,18 +453,41 @@ export function RecipeDetail() {
       {/* Ingredients — Checklist */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <CardTitle className="flex items-center gap-2 text-lg">
               <ChefHat className="h-5 w-5 text-primary" />
               Ingredients
             </CardTitle>
-            <EditButton
-              isEditing={editing.has('ingredients')}
-              onSave={() => saveSection('ingredients')}
-              onCancel={() => toggleEdit('ingredients')}
-              onEdit={() => toggleEdit('ingredients')}
-              saving={saving}
-            />
+            <div className="flex items-center gap-1.5">
+              {/* Unit toggle */}
+              {!editing.has('ingredients') && (
+                <div className="flex items-center rounded-md border border-border p-0.5 text-xs">
+                  <button
+                    onClick={() => setUnitSystem('metric')}
+                    className={`px-2 py-1 rounded transition-colors ${
+                      unitSystem === 'metric' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'
+                    }`}
+                  >
+                    Metric
+                  </button>
+                  <button
+                    onClick={() => setUnitSystem('imperial')}
+                    className={`px-2 py-1 rounded transition-colors ${
+                      unitSystem === 'imperial' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'
+                    }`}
+                  >
+                    Imperial
+                  </button>
+                </div>
+              )}
+              <EditButton
+                isEditing={editing.has('ingredients')}
+                onSave={() => saveSection('ingredients')}
+                onCancel={() => toggleEdit('ingredients')}
+                onEdit={() => toggleEdit('ingredients')}
+                saving={saving}
+              />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -459,12 +542,14 @@ export function RecipeDetail() {
                       }`}
                     >
                       <span className="font-medium">{ing.name}</span>
-                      {(ing.amount || ing.unit) && (
-                        <span className="text-muted-foreground ml-2">
-                          {scaleAmount(ing.amount)}
-                          {ing.unit && ` ${ing.unit}`}
-                        </span>
-                      )}
+                      {(ing.amount || ing.unit) && (() => {
+                        const display = getDisplayAmount(ing);
+                        return (
+                          <span className="text-muted-foreground ml-2">
+                            {display.amount}{display.unit && ` ${display.unit}`}
+                          </span>
+                        );
+                      })()}
                     </span>
                     <EvidenceTooltip evidence={ing.evidence} flag={ing.flag} notes={ing.notes} />
                   </label>
@@ -478,12 +563,12 @@ export function RecipeDetail() {
       {/* Instructions */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <CardTitle className="flex items-center gap-2 text-lg">
               <ListOrdered className="h-5 w-5 text-primary" />
               Instructions
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               {recipe.instructions && recipe.instructions.length > 0 && !editing.has('instructions') && (
                 <Button
                   variant="outline"
@@ -492,7 +577,8 @@ export function RecipeDetail() {
                   className="gap-1.5"
                 >
                   <Maximize2 className="h-3.5 w-3.5" />
-                  Cooking Mode
+                  <span className="hidden sm:inline">Cooking Mode</span>
+                  <span className="sm:hidden">Cook</span>
                 </Button>
               )}
               <EditButton
