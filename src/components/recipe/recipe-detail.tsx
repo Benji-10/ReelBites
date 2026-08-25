@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
-  ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight,
+  ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight, Maximize2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,9 @@ import { useStore } from '@/lib/store';
 import { toast } from 'sonner';
 import type { SavedRecipe, RecipeIngredient, RecipeInstruction, RecipeMetadata } from '@/lib/types';
 
+import { EvidenceTooltip } from './evidence-tooltip';
+import { CookingMode } from './cooking-mode';
+
 export function RecipeDetail() {
   const { view, recipes, updateRecipe, removeRecipe, setView, authToken } = useStore();
   const recipeId = view.name === 'detail' ? view.recipeId : null;
@@ -32,6 +35,7 @@ export function RecipeDetail() {
   const [recipe, setRecipe] = useState<SavedRecipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [cookingMode, setCookingMode] = useState(false);
 
   const [editing, setEditing] = useState<Set<string>>(new Set());
   const [editTitle, setEditTitle] = useState('');
@@ -462,6 +466,7 @@ export function RecipeDetail() {
                         </span>
                       )}
                     </span>
+                    <EvidenceTooltip evidence={ing.evidence} flag={ing.flag} notes={ing.notes} />
                   </label>
                 );
               })}
@@ -478,13 +483,26 @@ export function RecipeDetail() {
               <ListOrdered className="h-5 w-5 text-primary" />
               Instructions
             </CardTitle>
-            <EditButton
-              isEditing={editing.has('instructions')}
-              onSave={() => saveSection('instructions')}
-              onCancel={() => toggleEdit('instructions')}
-              onEdit={() => toggleEdit('instructions')}
-              saving={saving}
-            />
+            <div className="flex items-center gap-2">
+              {recipe.instructions && recipe.instructions.length > 0 && !editing.has('instructions') && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCookingMode(true)}
+                  className="gap-1.5"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  Cooking Mode
+                </Button>
+              )}
+              <EditButton
+                isEditing={editing.has('instructions')}
+                onSave={() => saveSection('instructions')}
+                onCancel={() => toggleEdit('instructions')}
+                onEdit={() => toggleEdit('instructions')}
+                saving={saving}
+              />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -588,6 +606,15 @@ export function RecipeDetail() {
             </details>
           </CardContent>
         </Card>
+      )}
+
+      {/* Cooking Mode overlay */}
+      {cookingMode && recipe.instructions && (
+        <CookingMode
+          instructions={recipe.instructions}
+          title={recipe.title}
+          onClose={() => setCookingMode(false)}
+        />
       )}
     </div>
   );

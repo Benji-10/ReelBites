@@ -36,48 +36,79 @@ export async function runClientPipeline(
   instagramUrl: string,
   onProgress: ProgressCallback,
 ): Promise<{ recipe: GeneratedRecipe; post: InstagramPost }> {
-  // Step 1: Scrape Instagram via server API (Apify).
-  onProgress({
-    step: 'scrape',
-    message: 'Fetching Instagram reel data via Apify...',
-    progress: 5,
-  });
+  // The scrape + download steps are wrapped in a retry loop.
+  // If the video download fails (CORS, expired URL, rate limit), we
+  // re-scrape to get a fresh video URL and try again.
+  let post: InstagramPost | null = null;
+  let videoData: Uint8Array | null = null;
+  const MAX_RESCRAPE_ATTEMPTS = 3;
 
-  const scrapeResponse = await fetch('/api/scrape', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: instagramUrl }),
-  });
+  for (let scrapeAttempt = 1; scrapeAttempt <= MAX_RESCRAPE_ATTEMPTS; scrapeAttempt++) {
+    // Step 1: Scrape Instagram via server API (Apify).
+    onProgress({
+      step: 'scrape',
+      message: scrapeAttempt === 1
+        ? 'Fetching Instagram reel data via Apify...'
+        : `Re-scraping for a fresh video URL (attempt ${scrapeAttempt}/${MAX_RESCRAPE_ATTEMPTS})...`,
+      progress: 5,
+    });
 
-  if (!scrapeResponse.ok) {
-    const errorData = await scrapeResponse.json().catch(() => ({ error: 'Scrape failed.' }));
-    throw new Error(errorData.error || `Scrape failed: HTTP ${scrapeResponse.status}`);
+    const scrapeResponse = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: instagramUrl }),
+    });
+
+    if (!scrapeResponse.ok) {
+      const errorData = await scrapeResponse.json().catch(() => ({ error: 'Scrape failed.' }));
+      throw new Error(errorData.error || `Scrape failed: HTTP ${scrapeResponse.status}`);
+    }
+
+    const scrapeResult = (await scrapeResponse.json()) as { post: InstagramPost };
+    post = scrapeResult.post;
+
+    if (!post.videoUrl) {
+      throw new Error(
+        'No video URL found in the Instagram post. The post may not contain a video.',
+      );
+    }
+
+    onProgress({
+      step: 'scrape',
+      message: `Found video from @${post.author || 'unknown'}.`,
+      progress: 20,
+    });
+
+    // Step 2: Download the video (via server proxy).
+    onProgress({
+      step: 'download',
+      message: 'Downloading video file...',
+      progress: 22,
+    });
+
+    try {
+      videoData = await downloadVideo(post.videoUrl, (msg) =>
+        onProgress({ step: 'download', message: msg, progress: 30 }),
+      );
+      break; // Success — exit the retry loop.
+    } catch (err) {
+      const downloadError = err as Error & { shouldRescrape?: boolean };
+      if (downloadError.shouldRescrape && scrapeAttempt < MAX_RESCRAPE_ATTEMPTS) {
+        onProgress({
+          step: 'download',
+          message: `Download failed, getting a fresh video URL...`,
+          progress: 22,
+        });
+        // Loop continues — re-scrape.
+      } else {
+        throw err; // Max attempts reached, or non-retryable error.
+      }
+    }
   }
 
-  const { post } = (await scrapeResponse.json()) as { post: InstagramPost };
-
-  if (!post.videoUrl) {
-    throw new Error(
-      'No video URL found in the Instagram post. The post may not contain a video.',
-    );
+  if (!post || !videoData) {
+    throw new Error('Failed to download video after multiple scrape attempts.');
   }
-
-  onProgress({
-    step: 'scrape',
-    message: `Found video from @${post.author || 'unknown'}. Caption: ${post.caption?.slice(0, 60) || '(none)'}...`,
-    progress: 20,
-  });
-
-  // Step 2: Download the video (client-side).
-  onProgress({
-    step: 'download',
-    message: 'Downloading video file...',
-    progress: 22,
-  });
-
-  const videoData = await downloadVideo(post.videoUrl, (msg) =>
-    onProgress({ step: 'download', message: msg, progress: 30 }),
-  );
 
   // Step 3: Extract audio with ffmpeg.wasm (client-side).
   onProgress({

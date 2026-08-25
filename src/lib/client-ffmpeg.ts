@@ -98,13 +98,21 @@ async function resetFfmpeg(): Promise<void> {
 /**
  * Download a video URL and return it as a Uint8Array.
  *
- * Handles 302 redirects and retries on network errors.
+ * Uses the server-side /api/video-proxy to avoid CORS issues with
+ * Instagram's CDN (which doesn't send CORS headers).
+ *
+ * If the download fails (CORS, 302 redirect issues, expired URL),
+ * it retries up to 5 times with exponential backoff. If all retries
+ * fail, it throws an error that tells the pipeline to re-scrape.
  */
 export async function downloadVideo(
   videoUrl: string,
   onProgress?: (message: string) => void,
 ): Promise<Uint8Array> {
-  onProgress?.(`Downloading video from ${new URL(videoUrl).hostname}...`);
+  onProgress?.(`Downloading video via proxy...`);
+
+  // Route through our server proxy to avoid CORS.
+  const proxyUrl = `/api/video-proxy?videoUrl=${encodeURIComponent(videoUrl)}`;
 
   let lastError: Error | null = null;
 
@@ -116,7 +124,7 @@ export async function downloadVideo(
         await new Promise((r) => setTimeout(r, waitMs));
       }
 
-      const response = await fetch(videoUrl, {
+      const response = await fetch(proxyUrl, {
         redirect: 'follow',
       });
 
@@ -155,6 +163,10 @@ export async function downloadVideo(
       }
 
       const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (totalLength === 0) {
+        throw new Error('Downloaded video is empty.');
+      }
+
       const result = new Uint8Array(totalLength);
       let offset = 0;
       for (const chunk of chunks) {
@@ -170,10 +182,14 @@ export async function downloadVideo(
     }
   }
 
-  throw new Error(
-    `Failed to download video after 5 attempts. Last error: ${lastError?.message}. ` +
-      'The Instagram CDN URL may have expired. Try extracting again to get a fresh URL.',
-  );
+  // Throw a special error that tells the pipeline to re-scrape.
+  const error = new Error(
+    `Video download failed after 5 attempts. Last error: ${lastError?.message}. ` +
+      'The Instagram CDN URL may have expired or is rate-limiting. ' +
+      'The pipeline will re-scrape to get a fresh URL.',
+  ) as Error & { shouldRescrape?: boolean };
+  error.shouldRescrape = true;
+  throw error;
 }
 
 /**
