@@ -16,7 +16,6 @@
  */
 
 import { downloadVideo, extractAudio, extractFrames } from './client-ffmpeg';
-import { ocrFrames } from './client-ocr';
 import type { GeneratedRecipe, InstagramComment, InstagramPost } from './types';
 
 export type ProgressCallback = (update: {
@@ -340,13 +339,60 @@ export async function runClientPipeline(
     if (frames.length > 0) {
       onProgress({
         step: 'ocr',
-        message: `Analyzing ${frames.length} frames (batch parallel OCR)...`,
+        message: `Analyzing ${frames.length} frames with Gemini Vision...`,
         progress: 80,
       });
 
-      ocrText = await ocrFrames(frames, (msg, ocrPercent) => {
-        const mappedPercent = 80 + Math.round((ocrPercent || 0) * 0.1);
-        onProgress({ step: 'ocr', message: msg, progress: mappedPercent });
+      // Convert frames to base64 and send to /api/ocr (Gemini Vision).
+      const BATCH_SIZE = 10;
+      const allOcrText: string[] = [];
+
+      for (let i = 0; i < frames.length; i += BATCH_SIZE) {
+        const batch = frames.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(frames.length / BATCH_SIZE);
+        onProgress({
+          step: 'ocr',
+          message: `OCR batch ${batchNum}/${totalBatches} (${i + batch.length}/${frames.length} frames)...`,
+          progress: 80 + Math.round((i / frames.length) * 10),
+        });
+
+        // Convert frames to base64 (they're already Uint8Array JPEGs).
+        const framesData = batch.map((f) => {
+          let binary = '';
+          const chunkSize = 8192;
+          for (let j = 0; j < f.data.length; j += chunkSize) {
+            const chunk = f.data.subarray(j, j + chunkSize);
+            binary += String.fromCharCode(...chunk);
+          }
+          return { data: btoa(binary), timestamp: f.timestamp };
+        });
+
+        try {
+          const ocrResponse = await fetch('/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frames: framesData }),
+          });
+
+          if (ocrResponse.ok) {
+            const ocrResult = await ocrResponse.json();
+            if (ocrResult.ocrText) {
+              allOcrText.push(ocrResult.ocrText);
+            }
+          }
+        } catch (err) {
+          console.warn(`[pipeline] OCR batch ${batchNum} failed:`, err);
+        }
+      }
+
+      ocrText = allOcrText.join('\n\n---\n\n');
+      onProgress({
+        step: 'ocr',
+        message: ocrText
+          ? `OCR complete: ${ocrText.length} chars extracted.`
+          : 'OCR complete: no text found.',
+        progress: 90,
       });
     }
   } catch (err) {
