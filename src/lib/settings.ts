@@ -1,28 +1,42 @@
 /**
  * User settings stored in localStorage.
  *
- * Settings include:
- *   - unitSystem: 'metric' | 'imperial' — default unit display for all recipes
- *   - defaultServings: number — default serving size for new recipes
+ * Per-category unit preferences:
+ *   - smallLiquid: tsp/tbsp vs ml (for small liquid measurements)
+ *   - largeLiquid: cups/pints/gallons vs liters (for large liquid measurements)
+ *   - weight: oz/lbs vs g/kg (for weight measurements)
+ *   - dry: cups vs g (for dry ingredients like flour, sugar)
+ *   - temperature: °F vs °C
  */
 
 import { create } from 'zustand';
 
-export type UnitSystem = 'metric' | 'imperial';
+export type UnitPreference = 'metric' | 'imperial';
 
 export interface UserSettings {
-  unitSystem: UnitSystem;
+  // Per-category unit preferences
+  smallLiquid: UnitPreference; // tsp/tbsp vs ml
+  largeLiquid: UnitPreference; // cups/pints/gallons vs liters
+  weight: UnitPreference; // oz/lbs vs g/kg
+  dry: UnitPreference; // cups vs g (for flour, sugar, etc.)
+  temperature: UnitPreference; // °F vs °C
+  // Other settings
   defaultServings: number;
 }
 
 interface SettingsStore extends UserSettings {
-  setUnitSystem: (system: UnitSystem) => void;
-  setDefaultServings: (servings: number) => void;
+  setSetting: <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => void;
+  setAllMetric: () => void;
+  setAllImperial: () => void;
   loadSettings: () => void;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
-  unitSystem: 'metric',
+  smallLiquid: 'metric',
+  largeLiquid: 'metric',
+  weight: 'metric',
+  dry: 'metric',
+  temperature: 'metric',
   defaultServings: 4,
 };
 
@@ -38,23 +52,52 @@ function loadFromStorage(): UserSettings {
   return DEFAULT_SETTINGS;
 }
 
+function saveToStorage(settings: UserSettings): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('realbites-settings', JSON.stringify(settings));
+  } catch {}
+}
+
 export const useSettings = create<SettingsStore>((set) => ({
   ...DEFAULT_SETTINGS,
 
-  setUnitSystem: (unitSystem) => {
-    set({ unitSystem });
-    if (typeof window !== 'undefined') {
-      const current = loadFromStorage();
-      localStorage.setItem('realbites-settings', JSON.stringify({ ...current, unitSystem }));
-    }
+  setSetting: (key, value) => {
+    set((state) => {
+      const newSettings = { ...state, [key]: value };
+      saveToStorage(newSettings);
+      return { [key]: value } as Partial<SettingsStore>;
+    });
   },
 
-  setDefaultServings: (defaultServings) => {
-    set({ defaultServings });
-    if (typeof window !== 'undefined') {
-      const current = loadFromStorage();
-      localStorage.setItem('realbites-settings', JSON.stringify({ ...current, defaultServings }));
-    }
+  setAllMetric: () => {
+    set((state) => {
+      const newSettings: UserSettings = {
+        ...state,
+        smallLiquid: 'metric',
+        largeLiquid: 'metric',
+        weight: 'metric',
+        dry: 'metric',
+        temperature: 'metric',
+      };
+      saveToStorage(newSettings);
+      return newSettings;
+    });
+  },
+
+  setAllImperial: () => {
+    set((state) => {
+      const newSettings: UserSettings = {
+        ...state,
+        smallLiquid: 'imperial',
+        largeLiquid: 'imperial',
+        weight: 'imperial',
+        dry: 'imperial',
+        temperature: 'imperial',
+      };
+      saveToStorage(newSettings);
+      return newSettings;
+    });
   },
 
   loadSettings: () => {

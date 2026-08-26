@@ -51,7 +51,7 @@ export function RecipeDetail() {
 
   // Recipe scaling state.
   const [scaleFactor, setScaleFactor] = useState(1);
-  const { unitSystem } = useSettings();
+  const { smallLiquid, largeLiquid, weight, dry, temperature } = useSettings();
 
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
@@ -119,6 +119,19 @@ export function RecipeDetail() {
     return scaled % 1 === 0 ? scaled.toString() : scaled.toFixed(2).replace(/\.?0+$/, '');
   }
 
+  // Categorize a unit into its measurement type.
+  type UnitCategory = 'smallLiquid' | 'largeLiquid' | 'weight' | 'dry' | 'temperature' | 'other';
+
+  function categorizeUnit(unit: string): UnitCategory {
+    const u = unit.toLowerCase().trim();
+    if (['tsp', 'teaspoon', 'teaspoons', 'tbsp', 'tablespoon', 'tablespoons'].includes(u)) return 'smallLiquid';
+    if (['cup', 'cups', 'pint', 'pints', 'quart', 'quarts', 'gallon', 'gallons', 'l', 'liter', 'liters'].includes(u)) return 'largeLiquid';
+    if (['ml', 'milliliter', 'milliliters'].includes(u)) return 'largeLiquid';
+    if (['oz', 'ounce', 'ounces', 'lb', 'lbs', 'pound', 'pounds', 'g', 'gram', 'grams', 'kg', 'kilogram', 'kilograms'].includes(u)) return 'weight';
+    if (['°f', 'f', 'fahrenheit', '°c', 'c', 'celsius'].includes(u)) return 'temperature';
+    return 'other';
+  }
+
   // Unit conversion tables (no AI — pure math).
   const IMPERIAL_TO_METRIC: Record<string, { factor: number; unit: string }> = {
     'cup': { factor: 240, unit: 'ml' },
@@ -136,6 +149,12 @@ export function RecipeDetail() {
     'lbs': { factor: 453.6, unit: 'g' },
     'pound': { factor: 453.6, unit: 'g' },
     'pounds': { factor: 453.6, unit: 'g' },
+    'pint': { factor: 473, unit: 'ml' },
+    'pints': { factor: 473, unit: 'ml' },
+    'quart': { factor: 946, unit: 'ml' },
+    'quarts': { factor: 946, unit: 'ml' },
+    'gallon': { factor: 3785, unit: 'ml' },
+    'gallons': { factor: 3785, unit: 'ml' },
   };
 
   const METRIC_TO_IMPERIAL: Record<string, { factor: number; unit: string }> = {
@@ -143,6 +162,8 @@ export function RecipeDetail() {
     'g': { factor: 0.0353, unit: 'oz' },
     'kg': { factor: 2.205, unit: 'lb' },
     'l': { factor: 4.227, unit: 'cups' },
+    'liter': { factor: 4.227, unit: 'cups' },
+    'liters': { factor: 4.227, unit: 'cups' },
   };
 
   function convertUnit(amount: string | null | undefined, unit: string | null | undefined): { amount: string; unit: string } {
@@ -152,16 +173,44 @@ export function RecipeDetail() {
 
     const normalizedUnit = unit.toLowerCase().trim();
 
-    if (unitSystem === 'metric') {
-      // Convert imperial → metric
+    // Temperature needs special formula.
+    if (['°f', 'f', 'fahrenheit'].includes(normalizedUnit)) {
+      if (temperature === 'metric') {
+        return { amount: Math.round((num - 32) * 5 / 9).toString(), unit: '°C' };
+      }
+      return { amount, unit };
+    }
+    if (['°c', 'c', 'celsius'].includes(normalizedUnit)) {
+      if (temperature === 'imperial') {
+        return { amount: Math.round(num * 9 / 5 + 32).toString(), unit: '°F' };
+      }
+      return { amount, unit };
+    }
+
+    // Determine the category and the user's preference for that category.
+    const category = categorizeUnit(normalizedUnit);
+    let preference: 'metric' | 'imperial' | null = null;
+
+    // For cups, use the 'dry' setting (user might want grams for flour/sugar).
+    if (normalizedUnit === 'cup' || normalizedUnit === 'cups') {
+      preference = dry;
+    } else {
+      switch (category) {
+        case 'smallLiquid': preference = smallLiquid; break;
+        case 'largeLiquid': preference = largeLiquid; break;
+        case 'weight': preference = weight; break;
+        default: return { amount, unit }; // No conversion for 'other'
+      }
+    }
+
+    if (preference === 'metric') {
       const conv = IMPERIAL_TO_METRIC[normalizedUnit];
       if (conv) {
         const converted = num * conv.factor;
         const formatted = converted >= 100 ? Math.round(converted).toString() : converted.toFixed(1).replace(/\.0$/, '');
         return { amount: formatted, unit: conv.unit };
       }
-    } else {
-      // Convert metric → imperial
+    } else if (preference === 'imperial') {
       const conv = METRIC_TO_IMPERIAL[normalizedUnit];
       if (conv) {
         const converted = num * conv.factor;

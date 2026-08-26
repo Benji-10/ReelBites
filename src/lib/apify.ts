@@ -217,6 +217,64 @@ function extractComments(item: ApifyReelResult): InstagramComment[] {
 }
 
 /**
+ * Fetch comments for an Instagram post using the dedicated comment scraper.
+ *
+ * The reel-scraper only returns the 10 most RECENT comments, which may not
+ * include the author's pinned recipe comment. This function uses
+ * `apify/instagram-comment-scraper` which can fetch comments sorted by
+ * likes and includes all comments (not just recent ones).
+ *
+ * Cost: ~$0.003 per call on the free tier.
+ */
+async function fetchComments(
+  instagramUrl: string,
+  token: string,
+  postAuthor: string | null,
+): Promise<InstagramComment[]> {
+  const client = new ApifyClient({ token });
+  const commentActorId = 'apify/instagram-comment-scraper';
+
+  console.log('[Apify] Fetching comments via:', commentActorId);
+  console.log('[Apify] Post author for isAuthor check:', postAuthor);
+
+  const input = {
+    directUrls: [normalizeInstagramUrl(instagramUrl)],
+    resultsLimit: 30, // Fetch up to 30 comments.
+  };
+
+  const run = await client.actor(commentActorId).call(input, {
+    waitSecs: 120,
+  });
+
+  if (run.status !== 'SUCCEEDED') {
+    console.warn('[Apify] Comment scraper did not succeed:', run.status);
+    return [];
+  }
+
+  const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 30 });
+  console.log('[Apify] Comment scraper returned', items.length, 'comments');
+
+  // Log all comment authors for debugging.
+  console.log('[Apify] Comment authors:', (items as Array<Record<string, unknown>>).map((c) => ({
+    author: c.ownerUsername,
+    textPreview: ((c.text as string) || '').slice(0, 60),
+    likes: c.likesCount,
+    pinned: c.pinnedByOwner,
+  })));
+
+  return (items as Array<Record<string, unknown>>)
+    .map((c): InstagramComment => {
+      const text = ((c.text as string) || '').trim();
+      const author = (c.ownerUsername as string) || 'unknown';
+      const likes = (c.likesCount as number) || 0;
+      const isPinned = c.pinnedByOwner === true;
+      const isAuthor = postAuthor ? author === postAuthor : false;
+      return { text, author, likes, isPinned, isAuthor };
+    })
+    .filter((c) => c.text.length > 0);
+}
+
+/**
  * Scrape an Instagram reel/post using Apify.
  *
  * @param instagramUrl - The full Instagram reel URL.
@@ -313,7 +371,52 @@ export async function scrapeInstagramPost(
     if (!a.isPinned && b.isPinned) return 1;
     return b.likes - a.likes;
   });
-  const topComments = comments.slice(0, 10);
+  let topComments = comments.slice(0, 10);
+
+  // If no author comments were found, try fetching them separately
+  // using the dedicated comment scraper actor. This is more reliable
+  // because the reel-scraper only returns the 10 most RECENT comments,
+  // which may not include the author's pinned recipe comment.
+  const hasAuthorComment = topComments.some((c) => c.isAuthor);
+  if (!hasAuthorComment) {
+    onProgress?.('No author comments found in initial scrape. Fetching comments separately...');
+
+    const postAuthor = result.ownerUsername || result.owner?.username || null;
+    try {
+      const fetchedComments = await fetchComments(instagramUrl, token!, postAuthor);
+      if (fetchedComments.length > 0) {
+        // Merge with existing comments (deduplicate by text).
+        const existingTexts = new Set(topComments.map((c) => c.text));
+        const newComments = fetchedComments.filter((c) => !existingTexts.has(c.text));
+
+        // Sort the fetched comments the same way.
+        newComments.sort((a, b) => {
+          if (a.isAuthor && !b.isAuthor) return -1;
+          if (!a.isAuthor && b.isAuthor) return 1;
+          if (a.isPinned && !b.isPinned) return -1;
+          if (!a.isPinned && b.isPinned) return 1;
+          return b.likes - a.likes;
+        });
+
+        // Merge: author comments first, then the rest.
+        const allComments = [...topComments, ...newComments];
+        allComments.sort((a, b) => {
+          if (a.isAuthor && !b.isAuthor) return -1;
+          if (!a.isAuthor && b.isAuthor) return 1;
+          if (a.isPinned && !b.isPinned) return -1;
+          if (!a.isPinned && b.isPinned) return 1;
+          return b.likes - a.likes;
+        });
+        topComments = allComments.slice(0, 10);
+
+        console.log('[Apify] Fetched comments separately. Author comments found:',
+          topComments.filter((c) => c.isAuthor).length);
+      }
+    } catch (err) {
+      console.warn('[Apify] Comment fetch failed:', (err as Error).message);
+      // Continue with the comments we have.
+    }
+  }
 
   // If we still don't have a video URL, throw a detailed error.
   if (!videoUrl) {
