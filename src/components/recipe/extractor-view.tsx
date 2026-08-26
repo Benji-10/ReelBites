@@ -22,6 +22,21 @@ export function ExtractorView() {
     isProcessing ||
     (extraction.status === 'failed' && extraction.logs.length > 0);
 
+  // Auto-start extraction if the store has a pending URL (from share target).
+  useEffect(() => {
+    if (extraction.url && extraction.status === 'processing' && !url) {
+      const pendingUrl = extraction.url;
+      requestAnimationFrame(() => {
+        setUrl(pendingUrl);
+        setTimeout(() => {
+          if (formRef.current) {
+            formRef.current.requestSubmit();
+          }
+        }, 300);
+      });
+    }
+  }, [extraction.url, extraction.status]);
+
   useEffect(() => {
     const handleRetry = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail;

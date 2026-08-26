@@ -21,6 +21,13 @@ export const metadata: Metadata = {
     "Paste an Instagram reel URL and get a structured recipe with ingredients, instructions, and evidence-backed flags.",
   icons: {
     icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "RealBites",
   },
 };
 
