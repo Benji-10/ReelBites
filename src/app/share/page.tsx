@@ -2,13 +2,10 @@
 
 import { useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useStore } from '@/lib/store';
-import { toast } from 'sonner';
 
 function ShareHandler() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { startExtraction, updateExtraction, resetExtraction } = useStore();
 
   useEffect(() => {
     // The share sheet sends the URL in one of these params.
@@ -20,22 +17,14 @@ function ShareHandler() {
     if (instagramMatch) {
       const reelUrl = instagramMatch[0];
       console.log('[share] Received Instagram URL:', reelUrl);
-
-      // Navigate to the extract page and auto-start extraction.
-      router.push('/');
-
-      // Wait a tick for the page to load, then start extraction.
-      setTimeout(() => {
-        startExtraction(reelUrl);
-        toast.success('Starting extraction from shared link!');
-      }, 500);
+      // Redirect to home with the URL as a query param.
+      // The home page will detect it and auto-start extraction.
+      router.push(`/?url=${encodeURIComponent(reelUrl)}`);
     } else {
-      // No Instagram URL found — just go to the home page.
       console.log('[share] No Instagram URL found in shared text:', url);
       router.push('/');
-      toast.info('No Instagram reel URL found in the shared content.');
     }
-  }, [searchParams, router, startExtraction]);
+  }, [searchParams, router]);
 
   return (
     <div className="min-h-screen flex items-center justify-center">
