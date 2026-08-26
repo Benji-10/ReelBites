@@ -77,7 +77,13 @@ export function RecipeDetail() {
     if (!recipeId) return;
     setLoading(true);
 
-    const fromStore = recipes.find((r) => r.id === recipeId);
+    // Try to find in the store (may need a tick for the store to update).
+    let fromStore = recipes.find((r) => r.id === recipeId);
+    if (!fromStore) {
+      // Wait 200ms and retry (handles race condition right after addRecipe).
+      await new Promise((r) => setTimeout(r, 200));
+      fromStore = recipes.find((r) => r.id === recipeId);
+    }
     if (fromStore) {
       setRecipe(fromStore);
       setEditTitle(fromStore.title);
@@ -86,6 +92,12 @@ export function RecipeDetail() {
       setEditInstructions([...(fromStore.instructions || [])]);
       setEditMetadata([...(fromStore.metadata || [])]);
       setEditSourceUrl(fromStore.sourceUrl || '');
+      setLoading(false);
+      return;
+    }
+
+    // If not in store and it's a temp ID, we can't fetch from API.
+    if (recipeId.startsWith('temp-')) {
       setLoading(false);
       return;
     }
@@ -539,54 +551,52 @@ export function RecipeDetail() {
         </div>
       )}
 
-      {/* Recipe Scaling */}
-      {originalServings > 1 && (
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-primary" />
-                <span className="text-sm font-medium">Servings</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setScaleFactor((f) => Math.max(0.5, f - 0.5))}
-                  disabled={scaleFactor <= 0.5}
-                >
-                  <Minus className="h-3.5 w-3.5" />
-                </Button>
-                <span className="font-semibold tabular-nums w-12 text-center">{currentServings}</span>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setScaleFactor((f) => f + 0.5)}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-                {scaleFactor !== 1 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => setScaleFactor(1)}
-                  >
-                    Reset
-                  </Button>
-                )}
-              </div>
+      {/* Recipe Scaling — always visible */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Servings</span>
             </div>
-            {scaleFactor !== 1 && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Recipe scaled to {currentServings} servings (original: {originalServings})
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setScaleFactor((f) => Math.max(0.5, f - 0.5))}
+                disabled={scaleFactor <= 0.5}
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </Button>
+              <span className="font-semibold tabular-nums w-12 text-center">{currentServings}</span>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setScaleFactor((f) => f + 0.5)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+              {scaleFactor !== 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setScaleFactor(1)}
+                >
+                  Reset
+                </Button>
+              )}
+            </div>
+          </div>
+          {scaleFactor !== 1 && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Recipe scaled to {currentServings} servings (original: {originalServings})
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Ingredients — Checklist */}
       <Card>

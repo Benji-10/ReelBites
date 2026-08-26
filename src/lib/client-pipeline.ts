@@ -332,12 +332,14 @@ export async function runClientPipeline(
 
   let ocrText = '';
   try {
-    const frames = await extractFrames(videoData, 0.5, 120, (msg) =>
+    // Native video extraction (HTML5 video + canvas) — much faster than ffmpeg.wasm.
+    // Use 1s intervals, max 30 frames (covers up to 30s videos, most reels).
+    const frames = await extractFrames(videoData, 1, 30, (msg) =>
       onProgress({ step: 'frames', message: msg, progress: 75 }),
     );
 
     if (frames.length > 0) {
-      // Sort frames by timestamp (extraction is interleaved, so they're not in order).
+      // Frames are already in order with native extraction, but sort just in case.
       frames.sort((a, b) => a.timestamp - b.timestamp);
 
       onProgress({

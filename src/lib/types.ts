@@ -70,6 +70,7 @@ export interface GeneratedRecipe {
   description: string;
   foodHint?: boolean;
   needsOcr?: boolean;
+  tags?: string[];
   ingredients: RecipeIngredient[];
   instructions: RecipeInstruction[];
   metadata: RecipeMetadata[];

@@ -56,12 +56,23 @@ CRITICAL RULES — FOLLOW THESE EXACTLY:
 4. If a step is vague (e.g. "cook until done" with no time), include it but add a flag of type "vague_instruction".
 5. For EACH instruction, include "ingredientRefs" — an array of indices (0-based) of the ingredients used in that step. E.g. if step 1 uses flour (index 0) and eggs (index 1), set ingredientRefs to [0, 1]. If a step uses no specific ingredients (e.g. "preheat oven"), set ingredientRefs to [].
 6. For EVERY ingredient, instruction, and metadata field, include an "evidence" string.
-7. Include as much metadata as possible: servings, prepTime, cookTime, totalTime, difficulty (easy/medium/hard), cuisine (e.g. "Japanese", "Italian"), temperature, nutrition (if mentioned), costPerServing (if mentioned), equipment (list any special equipment needed).
-8. Set "food_hint" to true if the caption, transcript, or comments mention food in ANY language.
-9. If "food_hint" is true but you cannot extract a complete recipe, set "needs_ocr" to true.
-10. If "food_hint" is false, set title to "Not a recipe" and add a flag of type "not_a_recipe".
-11. Do NOT include units in the "amount" field — put the unit in "unit".
-12. Return ONLY the JSON object, no markdown fences, no preamble.
+7. Include as much metadata as possible. ALWAYS include these even if estimated:
+   - servings (estimate based on the dish, e.g. "4")
+   - prepTime (estimate, e.g. "15 minutes")
+   - cookTime (estimate, e.g. "20 minutes")
+   - totalTime (sum of prep + cook)
+   - difficulty (easy/medium/hard — estimate based on complexity)
+   - cuisine (e.g. "Japanese", "Italian", "Chinese" — estimate from the dish)
+   - temperature (if baking/cooking temp is mentioned)
+   - nutrition (rough estimate if not mentioned, e.g. "~350 calories per serving")
+   - costPerServing (rough estimate, e.g. "$2-3")
+   - equipment (list any special equipment needed)
+8. Auto-generate 2-5 tags based on the recipe. Use common tags like: quick, vegetarian, vegan, high-protein, baking, dessert, breakfast, dinner, lunch, snack, healthy, comfort food, gluten-free, dairy-free, low-carb, keto, spicy, sweet, etc. Put them in the "tags" array.
+9. Set "food_hint" to true if the caption, transcript, or comments mention food in ANY language.
+10. If "food_hint" is true but you cannot extract a complete recipe, set "needs_ocr" to true.
+11. If "food_hint" is false, set title to "Not a recipe" and add a flag of type "not_a_recipe".
+12. Do NOT include units in the "amount" field — put the unit in "unit".
+13. Return ONLY the JSON object, no markdown fences, no preamble.
 
 SOURCES:
 
@@ -86,6 +97,7 @@ OUTPUT FORMAT (JSON):
   "description": "string — 1-2 sentence summary of the dish",
   "food_hint": true,
   "needs_ocr": false,
+  "tags": ["quick", "vegetarian", "dessert"],
   "ingredients": [
     {
       "name": "string",
@@ -130,6 +142,7 @@ interface GeminiRecipeResponse {
   description: string;
   food_hint?: boolean;
   needs_ocr?: boolean;
+  tags?: string[];
   ingredients: RecipeIngredient[];
   instructions: RecipeInstruction[];
   metadata: RecipeMetadata[];
@@ -223,6 +236,7 @@ export async function generateRecipe(args: {
     description: parsed.description,
     foodHint: parsed.food_hint ?? false,
     needsOcr: parsed.needs_ocr ?? false,
+    tags: parsed.tags || [],
     ingredients: parsed.ingredients,
     instructions: parsed.instructions,
     metadata: parsed.metadata,

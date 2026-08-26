@@ -79,7 +79,7 @@ export function ExtractorView() {
           imageUrl: recipe.imageUrl,
           sourceVideoUrl: recipe.sourceVideoUrl,
           isFavorite: false,
-          tags: [],
+          tags: recipe.tags || [],
           collection: null,
         }),
       });
@@ -104,7 +104,7 @@ export function ExtractorView() {
           imageUrl: recipe.imageUrl,
           sourceVideoUrl: recipe.sourceVideoUrl,
           isFavorite: false,
-          tags: [],
+          tags: recipe.tags || [],
           collection: null,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),

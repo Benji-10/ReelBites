@@ -1,462 +1,149 @@
 /**
- * Client-side video processing using ffmpeg.wasm.
+ * Fast frame extraction using native HTML5 <video> + <canvas>.
  *
- * Runs entirely in the browser using WebAssembly. This avoids bundling
- * a 76MB ffmpeg binary into the Netlify function (which would exceed the
- * 250MB function size limit).
+ * Instead of ffmpeg.wasm (which is extremely slow), this uses the browser's
+ * built-in hardware-accelerated video decoder to seek to specific timestamps
+ * and capture frames via canvas. This is ~100x faster than ffmpeg.wasm.
  *
- * CRITICAL: ffmpeg.wasm's writeFile() TRANSFERS the underlying ArrayBuffer
- * of any Uint8Array passed to it. We must copy data before each use.
- *
- * MEMORY FIX: The ffmpeg.wasm instance can hit "memory access out of bounds"
- * errors when processing large videos or doing multiple operations. To fix
- * this, we terminate and reload the ffmpeg instance between major operations
- * (audio extraction vs frame extraction) to reset the WASM heap.
+ * The video data (Uint8Array) is converted to a blob URL, loaded into a
+ * hidden <video> element, and we seek to each timestamp to capture frames.
  */
 
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL } from '@ffmpeg/util';
-
-let ffmpegInstance: FFmpeg | null = null;
-let loadPromise: Promise<FFmpeg> | null = null;
-
-const FFMPEG_CORE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js';
-const FFMPEG_WASM_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm';
-
 /**
- * Check if a Uint8Array's buffer is detached (transferred to a worker).
- */
-function isDetached(data: Uint8Array): boolean {
-  return data.buffer.byteLength === 0;
-}
-
-/**
- * Copy a Uint8Array into a fresh ArrayBuffer.
- */
-function copyForFfmpeg(data: Uint8Array): Uint8Array {
-  const copy = new Uint8Array(data.length);
-  copy.set(data);
-  return copy;
-}
-
-/**
- * Load the ffmpeg.wasm instance (singleton — only loads once per session).
- */
-async function getFfmpeg(onProgress?: (message: string) => void): Promise<FFmpeg> {
-  if (ffmpegInstance && ffmpegInstance.loaded) {
-    return ffmpegInstance;
-  }
-
-  if (loadPromise) {
-    return loadPromise;
-  }
-
-  loadPromise = (async () => {
-    onProgress?.('Loading ffmpeg.wasm...');
-    const ffmpeg = new FFmpeg();
-
-    ffmpeg.on('progress', ({ progress }) => {
-      const percent = Math.round(progress * 100);
-      console.log(`[ffmpeg.wasm] Processing: ${percent}%`);
-    });
-
-    ffmpeg.on('log', ({ message }) => {
-      console.log(`[ffmpeg.wasm] ${message}`);
-    });
-
-    const coreURL = await toBlobURL(FFMPEG_CORE_URL, 'text/javascript');
-    const wasmURL = await toBlobURL(FFMPEG_WASM_URL, 'application/wasm');
-
-    await ffmpeg.load({ coreURL, wasmURL });
-
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
-  })();
-
-  return loadPromise;
-}
-
-/**
- * Terminate the ffmpeg instance and force a reload on next use.
- *
- * This is the key fix for "memory access out of bounds" errors — by
- * terminating and reloading the WASM instance between operations, we
- * reset the WASM heap and avoid memory fragmentation.
- */
-async function resetFfmpeg(): Promise<void> {
-  if (ffmpegInstance) {
-    try {
-      ffmpegInstance.terminate();
-    } catch {
-      // Best-effort.
-    }
-    ffmpegInstance = null;
-    loadPromise = null;
-  }
-}
-
-/**
- * Download a video URL and return it as a Uint8Array.
- *
- * Uses the server-side /api/video-proxy to avoid CORS issues with
- * Instagram's CDN (which doesn't send CORS headers).
- *
- * If the download fails (CORS, 302 redirect issues, expired URL),
- * it retries up to 5 times with exponential backoff. If all retries
- * fail, it throws an error that tells the pipeline to re-scrape.
- */
-export async function downloadVideo(
-  videoUrl: string,
-  onProgress?: (message: string) => void,
-): Promise<Uint8Array> {
-  onProgress?.(`Downloading video via proxy...`);
-
-  // Route through our server proxy to avoid CORS.
-  const proxyUrl = `/api/video-proxy?videoUrl=${encodeURIComponent(videoUrl)}`;
-
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    try {
-      if (attempt > 1) {
-        const waitMs = 2000 * attempt;
-        onProgress?.(`Retry ${attempt}/5 in ${waitMs / 1000}s...`);
-        await new Promise((r) => setTimeout(r, waitMs));
-      }
-
-      const response = await fetch(proxyUrl, {
-        redirect: 'follow',
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      }
-
-      const contentLength = response.headers.get('content-length');
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
-
-      if (!response.body) {
-        throw new Error('Video download returned no body.');
-      }
-
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let receivedBytes = 0;
-      let lastProgressUpdate = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        receivedBytes += value.length;
-
-        if (totalBytes > 0) {
-          const percent = Math.floor((receivedBytes / totalBytes) * 100);
-          if (percent >= lastProgressUpdate + 10) {
-            lastProgressUpdate = percent;
-            onProgress?.(`Downloading video... ${percent}% (${(receivedBytes / 1024 / 1024).toFixed(1)} MB)`);
-          }
-        } else if (receivedBytes - lastProgressUpdate > 1024 * 1024) {
-          lastProgressUpdate = receivedBytes;
-          onProgress?.(`Downloading video... ${(receivedBytes / 1024 / 1024).toFixed(1)} MB`);
-        }
-      }
-
-      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-      if (totalLength === 0) {
-        throw new Error('Downloaded video is empty.');
-      }
-
-      const result = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        result.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      onProgress?.(`Video downloaded: ${(totalLength / 1024 / 1024).toFixed(1)} MB`);
-      return result;
-    } catch (err) {
-      lastError = err as Error;
-      console.error(`[downloadVideo] Attempt ${attempt} failed:`, lastError.message);
-    }
-  }
-
-  // Throw a special error that tells the pipeline to re-scrape.
-  const error = new Error(
-    `Video download failed after 5 attempts. Last error: ${lastError?.message}. ` +
-      'The Instagram CDN URL may have expired or is rate-limiting. ' +
-      'The pipeline will re-scrape to get a fresh URL.',
-  ) as Error & { shouldRescrape?: boolean };
-  error.shouldRescrape = true;
-  throw error;
-}
-
-/**
- * Extract the audio track from a video using ffmpeg.wasm.
- *
- * After extraction, the ffmpeg instance is terminated to free WASM memory
- * before the frame extraction step.
- */
-export async function extractAudio(
-  videoData: Uint8Array,
-  onProgress?: (message: string) => void,
-): Promise<{ audioBase64: string; audioSize: number }> {
-  console.log('[extractAudio] Starting', {
-    videoDataLength: videoData.length,
-    isDetached: isDetached(videoData),
-  });
-
-  onProgress?.('Loading ffmpeg.wasm (first run downloads ~30MB)...');
-  const ffmpeg = await getFfmpeg(onProgress);
-
-  const videoCopy = copyForFfmpeg(videoData);
-
-  onProgress?.('Writing video to ffmpeg...');
-  await ffmpeg.writeFile('input.mp4', videoCopy);
-
-  onProgress?.('Extracting audio (16kHz mono MP3)...');
-  try {
-    await ffmpeg.exec([
-      '-i', 'input.mp4',
-      '-vn',
-      '-acodec', 'libmp3lame',
-      '-ar', '16000',
-      '-ac', '1',
-      '-b:a', '32k',
-      'output.mp3',
-    ]);
-  } catch (err) {
-    console.error('[extractAudio] exec failed:', err);
-    // Check if output exists despite error.
-    try {
-      const data = await ffmpeg.readFile('output.mp3');
-      if (!data || (data as Uint8Array).length === 0) {
-        throw err;
-      }
-      console.log('[extractAudio] Output exists despite error');
-    } catch {
-      throw new Error(`ffmpeg audio extraction failed: ${(err as Error).message}`);
-    }
-  }
-
-  onProgress?.('Reading extracted audio...');
-  const audioData = await ffmpeg.readFile('output.mp3');
-
-  // Clean up virtual FS.
-  try {
-    await ffmpeg.deleteFile('input.mp4');
-    await ffmpeg.deleteFile('output.mp3');
-  } catch {}
-
-  // Copy data out of WASM heap.
-  const rawAudio = audioData as Uint8Array;
-  const audioBytes = new Uint8Array(rawAudio.length);
-  audioBytes.set(rawAudio);
-
-  // Convert to base64.
-  let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < audioBytes.length; i += chunkSize) {
-    const chunk = audioBytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  const audioBase64 = btoa(binary);
-
-  onProgress?.(`Audio extracted: ${(audioBytes.length / 1024).toFixed(1)} KB`);
-
-  // CRITICAL: Terminate ffmpeg to free WASM memory before frame extraction.
-  // This prevents "memory access out of bounds" errors.
-  await resetFfmpeg();
-
-  return { audioBase64, audioSize: audioBytes.length };
-}
-
-/**
- * Get the duration of a video file in seconds using ffmpeg.wasm.
- * Uses a separate ffmpeg instance that's terminated immediately after.
- */
-async function getVideoDuration(videoData: Uint8Array): Promise<number> {
-  const ffmpeg = await getFfmpeg();
-  const videoCopy = copyForFfmpeg(videoData);
-  await ffmpeg.writeFile('probe.mp4', videoCopy);
-
-  let duration = 30; // Default to 30s if we can't probe.
-  try {
-    // Use ffprobe-like approach: run ffmpeg with -f null to get duration.
-    // The log output contains "Duration: 00:00:XX.XX"
-    let durationLog = '';
-    const logHandler = ({ message }: { message: string }) => {
-      if (message.includes('Duration:')) {
-        durationLog = message;
-      }
-    };
-    ffmpeg.on('log', logHandler);
-
-    await ffmpeg.exec([
-      '-i', 'probe.mp4',
-      '-f', 'null',
-      '-',
-    ]);
-
-    ffmpeg.off('log', logHandler);
-
-    // Parse "Duration: 00:00:47.50" from the log.
-    const match = durationLog.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
-    if (match) {
-      const h = parseInt(match[1], 10);
-      const m = parseInt(match[2], 10);
-      const s = parseFloat(match[3]);
-      duration = h * 3600 + m * 60 + s;
-      console.log('[extractFrames] Video duration:', duration, 'seconds');
-    }
-  } catch (err) {
-    console.warn('[extractFrames] Duration probe failed, using default 30s:', err);
-  }
-
-  try { await ffmpeg.deleteFile('probe.mp4'); } catch {}
-  await resetFfmpeg();
-  return duration;
-}
-
-/**
- * Extract frames from a video at a fixed interval using ffmpeg.wasm.
- *
- * Uses a CHUNKED approach to avoid WASM memory crashes:
- *   - Probes the video duration first
- *   - Splits the video into 5-second chunks
- *   - For each chunk, loads a FRESH ffmpeg instance, seeks to the chunk start,
- *     and extracts frames only from that chunk
- *   - Terminates ffmpeg between chunks to clear the WASM heap
- *
- * This prevents the "memory access out of bounds" / hang issue that occurs
- * when processing the entire video in one ffmpeg call.
+ * Extract frames from a video at a fixed interval using HTML5 video + canvas.
  *
  * @param videoData - The video file as a Uint8Array
- * @param intervalSeconds - Seconds between frames (default: 0.5)
- * @param maxFrames - Maximum number of frames to extract (default: 120)
+ * @param intervalSeconds - Seconds between frames (default: 1)
+ * @param maxFrames - Maximum number of frames to extract (default: 30)
+ * @returns Array of { data: Uint8Array, timestamp: number }
  */
 export async function extractFrames(
   videoData: Uint8Array,
-  intervalSeconds: number = 0.5,
-  maxFrames: number = 120,
+  intervalSeconds: number = 1,
+  maxFrames: number = 30,
   onProgress?: (message: string) => void,
 ): Promise<{ data: Uint8Array; timestamp: number }[]> {
-  console.log('[extractFrames] Starting chunked extraction', {
+  console.log('[extractFrames] Starting native video extraction', {
     videoDataLength: videoData.length,
-    isDetached: isDetached(videoData),
     intervalSeconds,
     maxFrames,
   });
 
-  if (isDetached(videoData)) {
-    throw new Error('videoData buffer is detached — pipeline error.');
-  }
+  // Create a blob URL from the video data.
+  const blob = new Blob([videoData], { type: 'video/mp4' });
+  const videoUrl = URL.createObjectURL(blob);
 
-  // Step 1: Probe the video duration.
-  onProgress?.('Probing video duration...');
-  const duration = await getVideoDuration(videoData);
+  // Create a hidden video element.
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.src = videoUrl;
 
-  // Calculate how many frames we'll extract.
-  const totalFrames = Math.min(maxFrames, Math.floor(duration / intervalSeconds));
-  const CHUNK_DURATION = 5; // Extract 5 seconds of video per chunk.
-  const framesPerChunk = Math.floor(CHUNK_DURATION / intervalSeconds); // 10 at 0.5s interval.
-  const chunkCount = Math.ceil(duration / CHUNK_DURATION);
-
-  console.log('[extractFrames] Plan:', {
-    duration,
-    totalFrames,
-    framesPerChunk,
-    chunkCount,
+  // Wait for the video to load its metadata (to get duration).
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error('Failed to load video metadata'));
+    // Timeout in case the video doesn't load.
+    setTimeout(() => reject(new Error('Video load timed out after 15s')), 15000);
   });
 
-  onProgress?.(`Extracting ${totalFrames} frames in ${chunkCount} chunks (interleaved)...`);
+  const duration = video.duration;
+  console.log('[extractFrames] Video duration:', duration, 'seconds');
 
-  const allFrames: { data: Uint8Array; timestamp: number }[] = [];
-
-  // INTERLEAVED chunking: instead of chunking by time (0-5s, 5-10s, 10-15s),
-  // we chunk by frame index mod chunkCount. This way:
-  //   Chunk 0: frames 0, 5, 10, 15, ... (every 5th frame, spread across entire video)
-  //   Chunk 1: frames 1, 6, 11, 16, ...
-  //   Chunk 2: frames 2, 7, 12, 17, ...
-  //
-  // If a chunk fails/times out, we lose frames spread across the entire video
-  // (losing ~1/5 of frames from each 5-second section) instead of losing an
-  // entire 5-second block.
-
-  for (let chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
-    // Build the list of frame timestamps for this chunk (interleaved).
-    const chunkTimestamps: number[] = [];
-    for (let frameIdx = chunkIdx; frameIdx < totalFrames; frameIdx += chunkCount) {
-      if (allFrames.length + chunkTimestamps.length >= maxFrames) break;
-      chunkTimestamps.push(frameIdx * intervalSeconds);
-    }
-
-    if (chunkTimestamps.length === 0) continue;
-    if (allFrames.length >= maxFrames) break;
-
-    onProgress?.(
-      `Chunk ${chunkIdx + 1}/${chunkCount}: ${chunkTimestamps.length} frames (interleaved)...`,
-    );
-
-    // Load a FRESH ffmpeg instance for each chunk.
-    const ffmpeg = await getFfmpeg();
-    const videoCopy = copyForFfmpeg(videoData);
-
-    try {
-      await ffmpeg.writeFile('input.mp4', videoCopy);
-
-      // Extract each frame in this chunk by seeking to its timestamp.
-      // We extract one frame at a time to avoid the fps filter memory issue.
-      let framesExtractedThisChunk = 0;
-      for (let i = 0; i < chunkTimestamps.length; i++) {
-        const timestamp = chunkTimestamps[i];
-        const outputName = `f${i}.jpg`;
-
-        try {
-          // Seek to the exact timestamp and extract 1 frame.
-          await ffmpeg.exec([
-            '-ss', String(timestamp),
-            '-i', 'input.mp4',
-            '-frames:v', '1',
-            '-vf', 'scale=480:-1',
-            '-q:v', '5',
-            outputName,
-          ]);
-
-          const data = await ffmpeg.readFile(outputName);
-          if (data && (data as Uint8Array).length > 0) {
-            const rawData = data as Uint8Array;
-            const copy = new Uint8Array(rawData.length);
-            copy.set(rawData);
-            allFrames.push({ data: copy, timestamp });
-            framesExtractedThisChunk++;
-          }
-          await ffmpeg.deleteFile(outputName);
-        } catch (err) {
-          console.warn(`[extractFrames] Frame at ${timestamp}s failed:`, err);
-        }
-      }
-
-      // Clean up.
-      try { await ffmpeg.deleteFile('input.mp4'); } catch {}
-
-      const pct = Math.round((allFrames.length / totalFrames) * 100);
-      onProgress?.(
-        `Extracted ${allFrames.length}/${totalFrames} frames (${pct}%)`,
-      );
-      console.log(`[extractFrames] Chunk ${chunkIdx + 1} done: ${framesExtractedThisChunk}/${chunkTimestamps.length} frames. Total: ${allFrames.length}/${totalFrames}`);
-    } catch (err) {
-      console.error(`[extractFrames] Chunk ${chunkIdx + 1} failed:`, err);
-      // Continue to next chunk — partial results are better than none.
-    }
-
-    // CRITICAL: Terminate ffmpeg after each chunk to clear the WASM heap.
-    await resetFfmpeg();
+  // Calculate frame timestamps.
+  const totalFrames = Math.min(maxFrames, Math.floor(duration / intervalSeconds));
+  const timestamps: number[] = [];
+  for (let i = 0; i < totalFrames; i++) {
+    timestamps.push(Math.min(i * intervalSeconds, duration - 0.1));
   }
 
-  onProgress?.(`Extracted ${allFrames.length} frames total.`);
-  console.log('[extractFrames] Complete:', allFrames.length, 'frames');
+  onProgress?.(`Extracting ${timestamps.length} frames from ${duration.toFixed(1)}s video (native)...`);
 
-  return allFrames;
+  // Create a canvas for capturing frames.
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    URL.revokeObjectURL(videoUrl);
+    throw new Error('Could not create canvas context');
+  }
+
+  const frames: { data: Uint8Array; timestamp: number }[] = [];
+
+  // Seek to each timestamp and capture a frame.
+  for (let i = 0; i < timestamps.length; i++) {
+    const timestamp = timestamps[i];
+
+    try {
+      // Seek the video to the timestamp.
+      await seekTo(video, timestamp);
+
+      // Set canvas size to match video (scaled down for speed).
+      const targetWidth = 480;
+      const scale = targetWidth / video.videoWidth;
+      canvas.width = targetWidth;
+      canvas.height = Math.round(video.videoHeight * scale);
+
+      // Draw the current video frame to the canvas.
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get the image data as JPEG.
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob(resolve, 'image/jpeg', 0.7);
+      });
+
+      if (blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        frames.push({
+          data: new Uint8Array(arrayBuffer),
+          timestamp,
+        });
+      }
+
+      if (i % 5 === 0 || i === timestamps.length - 1) {
+        const pct = Math.round(((i + 1) / timestamps.length) * 100);
+        onProgress?.(`Extracting frames: ${pct}% (${i + 1}/${timestamps.length})`);
+      }
+    } catch (err) {
+      console.warn(`[extractFrames] Frame at ${timestamp}s failed:`, err);
+    }
+  }
+
+  // Clean up.
+  URL.revokeObjectURL(videoUrl);
+  video.src = '';
+
+  onProgress?.(`Extracted ${frames.length} frames.`);
+  console.log('[extractFrames] Complete:', frames.length, 'frames');
+
+  return frames;
+}
+
+/**
+ * Seek a video element to a specific timestamp and wait for the frame to be ready.
+ */
+function seekTo(video: HTMLVideoElement, timestamp: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onSeeked = () => {
+      video.removeEventListener('seeked', onSeeked);
+      // Small delay to ensure the frame is fully rendered.
+      requestAnimationFrame(() => resolve());
+    };
+    const onError = () => {
+      video.removeEventListener('error', onError);
+      reject(new Error(`Seek to ${timestamp}s failed`));
+    };
+
+    video.addEventListener('seeked', onSeeked);
+    video.addEventListener('error', onError);
+
+    video.currentTime = timestamp;
+
+    // Timeout in case seek hangs.
+    setTimeout(() => {
+      video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('error', onError);
+      resolve(); // Resolve anyway — the frame might be partially ready.
+    }, 3000);
+  });
 }
