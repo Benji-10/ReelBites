@@ -265,19 +265,31 @@ export async function runClientPipeline(
   recipe.imageUrl = post.thumbnailUrl;
   recipe.sourceVideoUrl = post.videoUrl;
 
-  // Check if this is NOT a recipe at all.
-  const isNotRecipe =
-    recipe.title.toLowerCase().includes('not a recipe') ||
-    recipe.flags.some((f) => f.type === 'not_a_recipe');
+  // Check if the caption or transcript hints at food/cooking, even if Gemini
+  // couldn't extract a full recipe. Food-related keywords in multiple languages.
+  const FOOD_KEYWORDS = [
+    // English
+    'recipe', 'cook', 'bake', 'fry', 'grill', 'roast', ' ingredient', 'flour', 'sugar',
+    'egg', 'butter', 'milk', 'cream', 'cheese', 'chocolate', 'vanilla', 'baking',
+    'pancake', 'cake', 'cookie', 'bread', 'pasta', 'pizza', 'soup', 'salad', 'sauce',
+    'delicious', 'tasty', 'yummy', 'food', 'meal', 'dish', 'kitchen', 'oven', 'stove',
+    // Chinese
+    '鬆餅', '煎餅', '蛋糕', '餅乾', '麵包', '麵條', '披薩', '湯', '沙拉', '醬',
+    '食譜', '烹飪', '烘焙', '煎', '烤', '炒', '蒸', '煮', '美味', '好吃',
+    '麵粉', '糖', '雞蛋', '奶油', '牛奶', '鮮奶油', '起司', '巧克力',
+    // Japanese
+    'レシピ', '料理', 'ケーキ', 'クッキー', 'パン', 'パスタ', 'ピザ',
+    // Korean
+    '레시피', '요리', '케이크', '빵',
+  ];
+  const combinedText = `${post.caption || ''} ${transcript}`.toLowerCase();
+  const hasFoodHint = FOOD_KEYWORDS.some((kw) => combinedText.toLowerCase().includes(kw.toLowerCase()));
 
-  if (isNotRecipe) {
-    onProgress({
-      step: 'done',
-      message: "This video doesn't appear to be a recipe. Not saving.",
-      progress: 100,
-    });
-    return { recipe, post, isRecipe: false };
-  }
+  // Check if this is explicitly NOT a recipe (Gemini's flag).
+  const titleSaysNotRecipe = recipe.title.toLowerCase().includes('not a recipe');
+  const hasNotRecipeFlag = recipe.flags.some((f) => f.type === 'not_a_recipe');
+  const needsOcr = recipe.flags.some((f) => f.type === 'needs_ocr') ||
+    recipe.title.toLowerCase().includes('incomplete');
 
   // Check if the recipe is "complete enough" — does it have ingredients with
   // amounts and at least 2 instructions?
@@ -285,8 +297,15 @@ export async function runClientPipeline(
     recipe.ingredients.some((ing) => ing.amount || ing.flag === 'estimated_amount');
   const hasGoodInstructions = recipe.instructions.length >= 2;
 
-  if (hasGoodIngredients && hasGoodInstructions) {
-    // We got a good recipe without OCR — skip frame extraction entirely!
+  // Decision tree:
+  // 1. If recipe is complete → done (skip OCR)
+  // 2. If Gemini says "needs_ocr" → try OCR
+  // 3. If Gemini says "not a recipe" AND no food hints → not a recipe (don't save)
+  // 4. If Gemini says "not a recipe" BUT there are food hints → try OCR
+  // 5. If recipe is incomplete (missing ingredients/steps) → try OCR
+
+  if (hasGoodIngredients && hasGoodInstructions && !needsOcr) {
+    // Case 1: Complete recipe — skip OCR.
     console.log('[pipeline] Recipe looks complete without OCR. Skipping frame extraction.');
     onProgress({
       step: 'done',
@@ -296,13 +315,40 @@ export async function runClientPipeline(
     return { recipe, post, isRecipe: true };
   }
 
-  // Step 6: Recipe was incomplete — extract frames and run OCR.
-  console.log('[pipeline] Recipe incomplete (missing ingredients or steps). Running OCR...');
-  onProgress({
-    step: 'frames',
-    message: 'Recipe needs more data. Extracting video frames for OCR...',
-    progress: 70,
-  });
+  if (needsOcr) {
+    // Case 2: Gemini explicitly says OCR is needed.
+    console.log('[pipeline] Gemini says OCR needed. Extracting frames...');
+    onProgress({
+      step: 'frames',
+      message: 'Checking video for on-screen recipe text...',
+      progress: 70,
+    });
+  } else if (titleSaysNotRecipe && !hasFoodHint) {
+    // Case 3: Not a recipe, no food hints — don't save.
+    console.log('[pipeline] Not a recipe (no food hints). Not saving.');
+    onProgress({
+      step: 'done',
+      message: "This video doesn't appear to be a recipe. Not saving.",
+      progress: 100,
+    });
+    return { recipe, post, isRecipe: false };
+  } else if (titleSaysNotRecipe && hasFoodHint) {
+    // Case 4: Food hints but Gemini couldn't extract — try OCR.
+    console.log('[pipeline] Food hints detected but no recipe extracted. Trying OCR for on-screen text...');
+    onProgress({
+      step: 'frames',
+      message: 'Caption mentions food — checking video for on-screen recipe...',
+      progress: 70,
+    });
+  } else {
+    // Case 5: Incomplete recipe — try OCR for missing info.
+    console.log('[pipeline] Recipe incomplete. Running OCR for more data...');
+    onProgress({
+      step: 'frames',
+      message: 'Recipe needs more data. Extracting video frames for OCR...',
+      progress: 70,
+    });
+  }
 
   let ocrText = '';
   try {

@@ -54,7 +54,7 @@ CRITICAL RULES — FOLLOW THESE EXACTLY:
 2. If an ingredient is mentioned but its amount is NOT specified, MAKE UP a realistic quantity based on your cooking knowledge (e.g. "salt" → 1 tsp, "olive oil" → 2 tbsp, "onion" → 1). Set "flag" to "estimated_amount" to indicate it was estimated, not from the source.
 3. If a step is vague (e.g. "cook until done" with no time), include it but add a flag of type "vague_instruction".
 4. For EVERY ingredient, instruction, and metadata field, include an "evidence" string that cites which source the info came from: "caption", "transcript", "ocr", "comments", or "estimated".
-5. If the reel is NOT a recipe (e.g. it's a lifestyle video, an ad, etc.), still output the JSON but set title to "Not a recipe" and add a flag of type "not_a_recipe".
+5. If the reel is NOT a recipe (e.g. it's a lifestyle video, an ad, etc.), still output the JSON but set title to "Not a recipe" and add a flag of type "not_a_recipe". HOWEVER: if the caption or transcript mentions food, cooking, or recipe-related terms (even in other languages like Chinese 鬆餅/食譜, Japanese レシピ, etc.), do NOT mark it as "not_a_recipe" — the recipe may be shown on-screen. Instead, extract whatever you can and set the title to "Recipe extraction incomplete" with a flag of type "needs_ocr".
 6. Do NOT include units in the "amount" field — put the unit in "unit". E.g. { amount: "2", unit: "cups" }, not { amount: "2 cups" }.
 7. Amount should be a number or simple fraction (e.g. "2", "0.5", "1.5"). Unit should be standard (cups, tbsp, tsp, oz, g, ml, pieces, cloves, etc.).
 8. Return ONLY the JSON object, no markdown fences, no preamble.
