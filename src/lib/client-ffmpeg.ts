@@ -279,13 +279,16 @@ export async function extractAudio(
  * after audio extraction) to ensure clean WASM memory.
  *
  * @param videoData - The video file as a Uint8Array (will be copied internally)
- * @param intervalSeconds - Seconds between frames (default: 1.5)
- * @param maxFrames - Maximum number of frames to extract (default: 50)
+ * Uses 0.5-second intervals for better coverage of fast-paced reels.
+ * For a 30s reel this produces ~60 frames. Capped at 120 to prevent memory issues.
+ *
+ * @param intervalSeconds - Seconds between frames (default: 0.5)
+ * @param maxFrames - Maximum number of frames to extract (default: 120)
  */
 export async function extractFrames(
   videoData: Uint8Array,
-  intervalSeconds: number = 1.5,
-  maxFrames: number = 50,
+  intervalSeconds: number = 0.5,
+  maxFrames: number = 120,
   onProgress?: (message: string) => void,
 ): Promise<{ data: Uint8Array; timestamp: number }[]> {
   console.log('[extractFrames] Starting', {
@@ -316,7 +319,7 @@ export async function extractFrames(
     if (percent !== lastProgressPercent && percent < 100) {
       lastProgressPercent = percent;
       const estimatedFrames = Math.min(maxFrames, Math.ceil((percent / 100) * maxFrames));
-      onProgress?.(`Extracting frames... ${percent}% (~${estimatedFrames}/${maxFrames})`);
+      onProgress?.(`Extracting frames: ${percent}% (~${estimatedFrames}/${maxFrames})`);
     }
   };
 
@@ -326,14 +329,14 @@ export async function extractFrames(
   // abort after 90 seconds and use whatever frames were extracted.
   const execPromise = ffmpeg.exec([
     '-i', 'input.mp4',
-    '-vf', `fps=1/${intervalSeconds},scale=640:-1`,
+    '-vf', `fps=1/${intervalSeconds},scale=480:-1`, // 480px for speed
     '-frames:v', String(maxFrames),
     '-q:v', '5',
     'frame_%04d.jpg',
   ]);
 
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Frame extraction timed out after 90s')), 90000);
+    setTimeout(() => reject(new Error('Frame extraction timed out after 180s')), 180000);
   });
 
   try {

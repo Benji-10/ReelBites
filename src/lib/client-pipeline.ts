@@ -212,31 +212,30 @@ export async function runClientPipeline(
   try {
     onProgress({
       step: 'frames',
-      message: 'Extracting video frames for OCR...',
+      message: 'Extracting video frames (every 0.5s)...',
       progress: 62,
     });
 
-    // Adaptive frame extraction: use 2s interval for longer videos to keep
-    // the frame count reasonable. For a 47s video, 2s interval = ~24 frames.
-    // For a 15s video, 1.5s interval = ~10 frames.
-    const intervalSeconds = 2;
-    const maxFrames = 25; // Cap at 25 frames for speed.
-
-    frames = await extractFrames(videoData, intervalSeconds, maxFrames, (msg) =>
-      onProgress({ step: 'frames', message: msg, progress: 72 }),
+    // 0.5-second interval for better coverage of fast-paced reels.
+    // Max 120 frames (covers up to 60 seconds of video).
+    frames = await extractFrames(videoData, 0.5, 120, (msg) =>
+      onProgress({ step: 'frames', message: msg, progress: 68 }),
     );
 
-    // Step 6: Run OCR on frames (client-side Tesseract.js).
+    // Step 6: Run OCR on frames (client-side Tesseract.js, batch parallel).
     if (frames.length > 0) {
       onProgress({
         step: 'ocr',
-        message: 'Running OCR on video frames...',
-        progress: 75,
+        message: `Analyzing ${frames.length} frames (batch parallel OCR)...`,
+        progress: 70,
       });
 
-      ocrText = await ocrFrames(frames, (msg) =>
-        onProgress({ step: 'ocr', message: msg, progress: 85 }),
-      );
+      // The OCR callback now includes a percent (0-100) for the OCR phase.
+      // Map it to the overall pipeline progress: 70% (start) → 85% (end).
+      ocrText = await ocrFrames(frames, (msg, ocrPercent) => {
+        const mappedPercent = 70 + Math.round((ocrPercent || 0) * 0.15);
+        onProgress({ step: 'ocr', message: msg, progress: mappedPercent });
+      });
     } else {
       onProgress({
         step: 'ocr',
