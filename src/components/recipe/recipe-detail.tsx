@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
   ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight, Maximize2,
+  Star, Tag, FolderPlus, ChefHat as ChefIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +29,25 @@ import type { SavedRecipe, RecipeIngredient, RecipeInstruction, RecipeMetadata }
 
 import { EvidenceTooltip } from './evidence-tooltip';
 import { CookingMode } from './cooking-mode';
+import { IngredientLink } from './ingredient-link';
+import { RecipeActions } from './recipe-actions';
 import { useSettings } from '@/lib/settings';
+
+// Returns the appropriate icon for a metadata key.
+function getMetadataIcon(key: string) {
+  const k = key.toLowerCase();
+  if (k.includes('prep') || k.includes('cook') || k.includes('time') || k.includes('total'))
+    return <Clock className="h-4 w-4 text-primary shrink-0" />;
+  if (k.includes('difficult'))
+    return <ChefIcon className="h-4 w-4 text-primary shrink-0" />;
+  if (k.includes('cuisine'))
+    return <ChefHat className="h-4 w-4 text-primary shrink-0" />;
+  if (k.includes('temperature'))
+    return <ChefIcon className="h-4 w-4 text-primary shrink-0" />;
+  if (k.includes('equipment'))
+    return <ChefHat className="h-4 w-4 text-primary shrink-0" />;
+  return <ChefIcon className="h-4 w-4 text-primary shrink-0" />;
+}
 
 export function RecipeDetail() {
   const { view, recipes, updateRecipe, removeRecipe, setView, authToken } = useStore();
@@ -226,6 +246,28 @@ export function RecipeDetail() {
     const scaled = scaleAmount(ing.amount);
     const converted = convertUnit(scaled, ing.unit);
     return converted;
+  }
+
+  // Generic update for favorites, tags, collection (no edit mode needed).
+  async function updateRecipeMeta(updates: Partial<SavedRecipe>) {
+    if (!recipe) return;
+    const updated = { ...recipe, ...updates } as SavedRecipe;
+    setRecipe(updated);
+    updateRecipe(updated);
+
+    // Save to DB in the background.
+    try {
+      await fetch(`/api/recipes/${recipe.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify(updates),
+      });
+    } catch (err) {
+      console.warn('Could not save recipe meta:', err);
+    }
   }
 
   function toggleEdit(section: string) {
@@ -459,7 +501,43 @@ export function RecipeDetail() {
             View original reel
           </a>
         )}
+
+        {/* Tags + Collection badges */}
+        {recipe.tags && recipe.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {recipe.tags.map((tag) => (
+              <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+            ))}
+          </div>
+        )}
+        {recipe.collection && (
+          <Badge variant="outline" className="text-xs">
+            <FolderPlus className="h-3 w-3 mr-1" />
+            {recipe.collection}
+          </Badge>
+        )}
       </div>
+
+      {/* Action bar: favorite, tags, collection */}
+      <RecipeActions recipe={recipe} onUpdate={updateRecipeMeta} />
+
+      {/* Metadata display */}
+      {recipe.metadata && recipe.metadata.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {recipe.metadata.filter(m => !['servings'].includes(m.key.toLowerCase())).map((m, i) => {
+            const icon = getMetadataIcon(m.key);
+            return (
+              <div key={i} className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/30">
+                {icon}
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground capitalize">{m.key.replace(/([A-Z])/g, ' $1').trim()}</p>
+                  <p className="text-sm font-medium truncate">{m.value}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Recipe Scaling */}
       {originalServings > 1 && (
@@ -666,7 +744,15 @@ export function RecipeDetail() {
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold shrink-0 mt-0.5">
                     {i + 1}
                   </div>
-                  <p className="text-sm leading-relaxed flex-1">{inst.step}</p>
+                  <div className="flex-1">
+                    <p className="text-sm leading-relaxed">{inst.step}</p>
+                    {/* Ingredient chips for this step */}
+                    <IngredientLink
+                      ingredientRefs={inst.ingredientRefs}
+                      ingredients={recipe.ingredients || []}
+                      scaleAmount={scaleAmount}
+                    />
+                  </div>
                 </li>
               ))}
             </ol>
@@ -764,8 +850,10 @@ export function RecipeDetail() {
       {cookingMode && recipe.instructions && (
         <CookingMode
           instructions={recipe.instructions}
+          ingredients={recipe.ingredients || []}
           title={recipe.title}
           onClose={() => setCookingMode(false)}
+          scaleAmount={scaleAmount}
         />
       )}
     </div>

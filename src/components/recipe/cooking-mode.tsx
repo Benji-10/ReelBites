@@ -4,15 +4,18 @@ import { useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EvidenceTooltip } from './evidence-tooltip';
-import type { RecipeInstruction } from '@/lib/types';
+import { IngredientLink } from './ingredient-link';
+import type { RecipeInstruction, RecipeIngredient } from '@/lib/types';
 
 interface CookingModeProps {
   instructions: RecipeInstruction[];
+  ingredients: RecipeIngredient[];
   title: string;
   onClose: () => void;
+  scaleAmount: (amount: string | null | undefined) => string;
 }
 
-export function CookingMode({ instructions, title, onClose }: CookingModeProps) {
+export function CookingMode({ instructions, ingredients, title, onClose, scaleAmount }: CookingModeProps) {
   const [currentStep, setCurrentStep] = useState(0);
 
   const step = instructions[currentStep];
@@ -60,8 +63,8 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
         <span>{instructions.length}</span>
       </div>
 
-      {/* Main content — the instruction */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+      {/* Main content */}
+      <div className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
         <div className="max-w-2xl w-full text-center space-y-6">
           <div className="text-6xl sm:text-7xl font-bold text-primary/20 tabular-nums">
             {currentStep + 1}
@@ -69,11 +72,24 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
           <p className="text-xl sm:text-2xl leading-relaxed font-medium">
             {step.step}
           </p>
+
+          {/* Ingredient chips for this step */}
+          <div className="flex justify-center">
+            <div className="text-left">
+              <IngredientLink
+                ingredientRefs={step.ingredientRefs}
+                ingredients={ingredients}
+                scaleAmount={scaleAmount}
+              />
+            </div>
+          </div>
+
+          {/* Evidence */}
           <div className="flex items-center justify-center gap-2">
             <EvidenceTooltip evidence={step.evidence} flag={step.flag} />
             {step.flag && (
               <span className="text-xs text-amber-500">
-                {step.flag === 'estimated_amount' || step.flag === 'missing_amount'
+                {step.flag === 'estimated_amount' || step.flag === 'missing_amount' || step.flag === 'estimated_ingredient'
                   ? 'Estimated'
                   : 'May need verification'}
               </span>
@@ -94,23 +110,20 @@ export function CookingMode({ instructions, title, onClose }: CookingModeProps) 
             <ChevronLeft className="h-4 w-4" />
             Previous
           </Button>
-
           <Button onClick={next} className="gap-1.5 flex-1 sm:flex-none">
             {isLastStep ? 'Finish' : 'Next'}
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
 
-        {/* Step dots — scrollable on mobile */}
+        {/* Step dots */}
         <div className="flex items-center justify-center gap-1.5 overflow-x-auto custom-scrollbar pb-1">
           {instructions.map((_, i) => (
             <button
               key={i}
               onClick={() => setCurrentStep(i)}
               className={`h-2 rounded-full transition-all shrink-0 ${
-                i === currentStep
-                  ? 'w-8 bg-primary'
-                  : 'w-2 bg-muted-foreground/30'
+                i === currentStep ? 'w-8 bg-primary' : 'w-2 bg-muted-foreground/30'
               }`}
               aria-label={`Go to step ${i + 1}`}
             />
