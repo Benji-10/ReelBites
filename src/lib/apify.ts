@@ -226,52 +226,133 @@ function extractComments(item: ApifyReelResult): InstagramComment[] {
  *
  * Cost: ~$0.003 per call on the free tier.
  */
+/**
+ * Fetch comments for an Instagram post.
+ *
+ * Tries two actors in order:
+ *   1. `apify/instagram-api-scraper` with resultsType="comments" — can fetch
+ *      up to 50 comments per post (hard cap). Better than the dedicated
+ *      comment scraper which is capped at 15 on the free plan.
+ *   2. `apify/instagram-comment-scraper` — fallback. Note: free plan is
+ *      capped at 15 comments per URL (Apify platform limit, not configurable).
+ *
+ * The actor can be overridden via the APIFY_COMMENT_ACTOR env var.
+ * Alternative: `apidojo/instagram-comments-scraper-api` (pay-per-use,
+ * ~$0.03/post, fetches ALL comments). Input format: { startUrls, maxItems }.
+ *
+ * @param instagramUrl - The Instagram reel/post URL
+ * @param token - Apify API token
+ * @param postAuthor - The post author's username (for isAuthor flag)
+ */
 async function fetchComments(
   instagramUrl: string,
   token: string,
   postAuthor: string | null,
 ): Promise<InstagramComment[]> {
   const client = new ApifyClient({ token });
-  const commentActorId = 'apify/instagram-comment-scraper';
+  const normalizedUrl = normalizeInstagramUrl(instagramUrl);
 
-  console.log('[Apify] Fetching comments via:', commentActorId);
+  // Allow overriding the comment actor via env var.
+  const customActor = process.env.APIFY_COMMENT_ACTOR;
+
+  // Default: try instagram-api-scraper first (up to 50 comments),
+  // then fall back to instagram-comment-scraper.
+  const actorsToTry = customActor
+    ? [customActor]
+    : ['apify/instagram-api-scraper', 'apify/instagram-comment-scraper'];
+
   console.log('[Apify] Post author for isAuthor check:', postAuthor);
+  console.log('[Apify] Will try actors:', actorsToTry);
 
-  const input = {
-    directUrls: [normalizeInstagramUrl(instagramUrl)],
-    resultsLimit: 30, // Fetch up to 30 comments.
-  };
+  for (const actorId of actorsToTry) {
+    try {
+      console.log('[Apify] Trying comment actor:', actorId);
 
-  const run = await client.actor(commentActorId).call(input, {
-    waitSecs: 120,
-  });
+      // Build the input based on which actor we're using.
+      let input: Record<string, unknown>;
 
-  if (run.status !== 'SUCCEEDED') {
-    console.warn('[Apify] Comment scraper did not succeed:', run.status);
-    return [];
+      if (actorId === 'apify/instagram-api-scraper') {
+        // This actor uses directUrls + resultsType.
+        input = {
+          directUrls: [normalizedUrl],
+          resultsType: 'comments',
+          resultsLimit: 50, // Hard cap is 50 comments per post.
+        };
+      } else if (actorId === 'apidojo/instagram-comments-scraper-api') {
+        // This actor uses startUrls + maxItems.
+        input = {
+          startUrls: [normalizedUrl],
+          fetchReplies: false,
+          maxItems: 100,
+        };
+      } else {
+        // Default: instagram-comment-scraper format.
+        input = {
+          directUrls: [normalizedUrl],
+          resultsLimit: 50,
+        };
+      }
+
+      const run = await client.actor(actorId).call(input, {
+        waitSecs: 120,
+      });
+
+      if (run.status !== 'SUCCEEDED') {
+        console.warn(`[Apify] ${actorId} did not succeed:`, run.status);
+        continue; // Try next actor.
+      }
+
+      const { items } = await client.dataset(run.defaultDatasetId).listItems({
+        limit: 100,
+      });
+
+      console.log(`[Apify] ${actorId} returned`, items.length, 'comments');
+
+      if (items.length === 0) {
+        console.warn(`[Apify] ${actorId} returned 0 comments, trying next actor...`);
+        continue;
+      }
+
+      // Log all comment authors for debugging.
+      console.log('[Apify] Comment authors:', (items as Array<Record<string, unknown>>).map((c) => ({
+        author: c.ownerUsername,
+        textPreview: ((c.text as string) || '').slice(0, 60),
+        likes: c.likesCount,
+        pinned: c.pinnedByOwner,
+      })));
+
+      const comments = (items as Array<Record<string, unknown>>)
+        .map((c): InstagramComment => {
+          const text = ((c.text as string) || '').trim();
+          const author = (c.ownerUsername as string) || 'unknown';
+          const likes = (c.likesCount as number) || 0;
+          const isPinned = c.pinnedByOwner === true;
+          const isAuthor = postAuthor ? author === postAuthor : false;
+          return { text, author, likes, isPinned, isAuthor };
+        })
+        .filter((c) => c.text.length > 0);
+
+      if (comments.length > 0) {
+        // Check if we found author comments.
+        const authorCount = comments.filter((c) => c.isAuthor).length;
+        console.log(`[Apify] Found ${authorCount} author comments out of ${comments.length} total`);
+
+        if (comments.length <= 15) {
+          console.warn('[Apify] ⚠️ Only got', comments.length, 'comments. This is likely the Apify free plan limit (15 comments).');
+          console.warn('[Apify] To get more comments, either:');
+          console.warn('[Apify]   1. Upgrade to Apify Starter plan ($29/mo)');
+          console.warn('[Apify]   2. Set APIFY_COMMENT_ACTOR=apidojo/instagram-comments-scraper-api (pay-per-use, ~$0.03/post)');
+        }
+
+        return comments;
+      }
+    } catch (err) {
+      console.warn(`[Apify] ${actorId} failed:`, (err as Error).message);
+    }
   }
 
-  const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 30 });
-  console.log('[Apify] Comment scraper returned', items.length, 'comments');
-
-  // Log all comment authors for debugging.
-  console.log('[Apify] Comment authors:', (items as Array<Record<string, unknown>>).map((c) => ({
-    author: c.ownerUsername,
-    textPreview: ((c.text as string) || '').slice(0, 60),
-    likes: c.likesCount,
-    pinned: c.pinnedByOwner,
-  })));
-
-  return (items as Array<Record<string, unknown>>)
-    .map((c): InstagramComment => {
-      const text = ((c.text as string) || '').trim();
-      const author = (c.ownerUsername as string) || 'unknown';
-      const likes = (c.likesCount as number) || 0;
-      const isPinned = c.pinnedByOwner === true;
-      const isAuthor = postAuthor ? author === postAuthor : false;
-      return { text, author, likes, isPinned, isAuthor };
-    })
-    .filter((c) => c.text.length > 0);
+  console.warn('[Apify] All comment actors failed or returned no comments.');
+  return [];
 }
 
 /**
