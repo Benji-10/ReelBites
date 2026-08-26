@@ -273,15 +273,66 @@ export async function extractAudio(
 }
 
 /**
+ * Get the duration of a video file in seconds using ffmpeg.wasm.
+ * Uses a separate ffmpeg instance that's terminated immediately after.
+ */
+async function getVideoDuration(videoData: Uint8Array): Promise<number> {
+  const ffmpeg = await getFfmpeg();
+  const videoCopy = copyForFfmpeg(videoData);
+  await ffmpeg.writeFile('probe.mp4', videoCopy);
+
+  let duration = 30; // Default to 30s if we can't probe.
+  try {
+    // Use ffprobe-like approach: run ffmpeg with -f null to get duration.
+    // The log output contains "Duration: 00:00:XX.XX"
+    let durationLog = '';
+    const logHandler = ({ message }: { message: string }) => {
+      if (message.includes('Duration:')) {
+        durationLog = message;
+      }
+    };
+    ffmpeg.on('log', logHandler);
+
+    await ffmpeg.exec([
+      '-i', 'probe.mp4',
+      '-f', 'null',
+      '-',
+    ]);
+
+    ffmpeg.off('log', logHandler);
+
+    // Parse "Duration: 00:00:47.50" from the log.
+    const match = durationLog.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+    if (match) {
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const s = parseFloat(match[3]);
+      duration = h * 3600 + m * 60 + s;
+      console.log('[extractFrames] Video duration:', duration, 'seconds');
+    }
+  } catch (err) {
+    console.warn('[extractFrames] Duration probe failed, using default 30s:', err);
+  }
+
+  try { await ffmpeg.deleteFile('probe.mp4'); } catch {}
+  await resetFfmpeg();
+  return duration;
+}
+
+/**
  * Extract frames from a video at a fixed interval using ffmpeg.wasm.
  *
- * The ffmpeg instance is freshly loaded (the previous one was terminated
- * after audio extraction) to ensure clean WASM memory.
+ * Uses a CHUNKED approach to avoid WASM memory crashes:
+ *   - Probes the video duration first
+ *   - Splits the video into 5-second chunks
+ *   - For each chunk, loads a FRESH ffmpeg instance, seeks to the chunk start,
+ *     and extracts frames only from that chunk
+ *   - Terminates ffmpeg between chunks to clear the WASM heap
  *
- * @param videoData - The video file as a Uint8Array (will be copied internally)
- * Uses 0.5-second intervals for better coverage of fast-paced reels.
- * For a 30s reel this produces ~60 frames. Capped at 120 to prevent memory issues.
+ * This prevents the "memory access out of bounds" / hang issue that occurs
+ * when processing the entire video in one ffmpeg call.
  *
+ * @param videoData - The video file as a Uint8Array
  * @param intervalSeconds - Seconds between frames (default: 0.5)
  * @param maxFrames - Maximum number of frames to extract (default: 120)
  */
@@ -291,7 +342,7 @@ export async function extractFrames(
   maxFrames: number = 120,
   onProgress?: (message: string) => void,
 ): Promise<{ data: Uint8Array; timestamp: number }[]> {
-  console.log('[extractFrames] Starting', {
+  console.log('[extractFrames] Starting chunked extraction', {
     videoDataLength: videoData.length,
     isDetached: isDetached(videoData),
     intervalSeconds,
@@ -302,84 +353,105 @@ export async function extractFrames(
     throw new Error('videoData buffer is detached — pipeline error.');
   }
 
-  // Load a fresh ffmpeg instance (previous one was terminated after audio).
-  onProgress?.('Loading ffmpeg.wasm for frame extraction...');
-  const ffmpeg = await getFfmpeg(onProgress);
+  // Step 1: Probe the video duration.
+  onProgress?.('Probing video duration...');
+  const duration = await getVideoDuration(videoData);
 
-  const videoCopy = copyForFfmpeg(videoData);
+  // Calculate how many frames we'll extract.
+  const totalFrames = Math.min(maxFrames, Math.floor(duration / intervalSeconds));
+  const CHUNK_DURATION = 5; // Extract 5 seconds of video per chunk.
+  const framesPerChunk = Math.floor(CHUNK_DURATION / intervalSeconds); // 10 at 0.5s interval.
+  const chunkCount = Math.ceil(duration / CHUNK_DURATION);
 
-  onProgress?.('Writing video to ffmpeg...');
-  await ffmpeg.writeFile('input.mp4', videoCopy);
-
-  onProgress?.(`Extracting up to ${maxFrames} frames (every ${intervalSeconds}s)...`);
-
-  let lastProgressPercent = -1;
-  const progressHandler = ({ progress }: { progress: number }) => {
-    const percent = Math.round(progress * 100);
-    if (percent !== lastProgressPercent && percent < 100) {
-      lastProgressPercent = percent;
-      const estimatedFrames = Math.min(maxFrames, Math.ceil((percent / 100) * maxFrames));
-      onProgress?.(`Extracting frames: ${percent}% (~${estimatedFrames}/${maxFrames})`);
-    }
-  };
-
-  ffmpeg.on('progress', progressHandler);
-
-  // Add a timeout — if ffmpeg hangs (common with WASM memory errors),
-  // abort after 90 seconds and use whatever frames were extracted.
-  const execPromise = ffmpeg.exec([
-    '-i', 'input.mp4',
-    '-vf', `fps=1/${intervalSeconds},scale=480:-1`, // 480px for speed
-    '-frames:v', String(maxFrames),
-    '-q:v', '5',
-    'frame_%04d.jpg',
-  ]);
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Frame extraction timed out after 180s')), 180000);
+  console.log('[extractFrames] Plan:', {
+    duration,
+    totalFrames,
+    framesPerChunk,
+    chunkCount,
   });
 
-  try {
-    await Promise.race([execPromise, timeoutPromise]);
-  } catch (err) {
-    console.error('[extractFrames] exec failed:', err);
-    onProgress?.('Frame extraction had errors, checking partial results...');
-    // Terminate the hung ffmpeg instance.
+  onProgress?.(`Extracting ${totalFrames} frames in ${chunkCount} chunks...`);
+
+  const allFrames: { data: Uint8Array; timestamp: number }[] = [];
+
+  // Step 2: Extract frames chunk by chunk.
+  for (let chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
+    const chunkStart = chunkIdx * CHUNK_DURATION;
+    const chunkEnd = Math.min(chunkStart + CHUNK_DURATION, duration);
+
+    // Stop if we have enough frames.
+    if (allFrames.length >= maxFrames) break;
+
+    const chunkFrameCount = Math.min(
+      framesPerChunk,
+      Math.floor((chunkEnd - chunkStart) / intervalSeconds),
+      maxFrames - allFrames.length,
+    );
+
+    if (chunkFrameCount <= 0) break;
+
+    onProgress?.(
+      `Chunk ${chunkIdx + 1}/${chunkCount}: frames at ${chunkStart}s–${chunkEnd}s (${chunkFrameCount} frames)...`,
+    );
+
+    // Load a FRESH ffmpeg instance for each chunk — this is the key to
+    // avoiding the WASM memory crash. Each instance gets a clean heap.
+    const ffmpeg = await getFfmpeg();
+    const videoCopy = copyForFfmpeg(videoData);
+
+    try {
+      await ffmpeg.writeFile('input.mp4', videoCopy);
+
+      // Use -ss (seek) BEFORE -i for fast seeking, then extract frames
+      // from the chunk only. This is much more memory-efficient than
+      // the fps filter which decodes the entire video.
+      await ffmpeg.exec([
+        '-ss', String(chunkStart),
+        '-i', 'input.mp4',
+        '-t', String(CHUNK_DURATION),
+        '-vf', `fps=1/${intervalSeconds},scale=480:-1`,
+        '-frames:v', String(chunkFrameCount),
+        '-q:v', '5',
+        'frame_%04d.jpg',
+      ]);
+
+      // Read the frames from this chunk.
+      for (let i = 1; i <= chunkFrameCount; i++) {
+        const filename = `frame_${String(i).padStart(4, '0')}.jpg`;
+        try {
+          const data = await ffmpeg.readFile(filename);
+          if (data && (data as Uint8Array).length > 0) {
+            const rawData = data as Uint8Array;
+            const copy = new Uint8Array(rawData.length);
+            copy.set(rawData);
+            const timestamp = chunkStart + (i - 1) * intervalSeconds;
+            allFrames.push({ data: copy, timestamp });
+          }
+          await ffmpeg.deleteFile(filename);
+        } catch {
+          break;
+        }
+      }
+
+      // Clean up.
+      try { await ffmpeg.deleteFile('input.mp4'); } catch {}
+
+      const pct = Math.round((allFrames.length / totalFrames) * 100);
+      onProgress?.(
+        `Extracted ${allFrames.length}/${totalFrames} frames (${pct}%)`,
+      );
+      console.log(`[extractFrames] Chunk ${chunkIdx + 1} done: ${allFrames.length}/${totalFrames} total frames`);
+    } catch (err) {
+      console.error(`[extractFrames] Chunk ${chunkIdx + 1} failed:`, err);
+      // Continue to next chunk — partial results are better than none.
+    }
+
+    // CRITICAL: Terminate ffmpeg after each chunk to clear the WASM heap.
     await resetFfmpeg();
   }
 
-  ffmpeg.off('progress', progressHandler);
+  onProgress?.(`Extracted ${allFrames.length} frames total.`);
+  console.log('[extractFrames] Complete:', allFrames.length, 'frames');
 
-  // Read all generated frames (may be partial).
-  onProgress?.('Reading extracted frames...');
-  const frames: { data: Uint8Array; timestamp: number }[] = [];
-  for (let i = 1; i <= maxFrames; i++) {
-    const filename = `frame_${String(i).padStart(4, '0')}.jpg`;
-    try {
-      const data = await ffmpeg.readFile(filename);
-      if (data && (data as Uint8Array).length > 0) {
-        const rawData = data as Uint8Array;
-        const copy = new Uint8Array(rawData.length);
-        copy.set(rawData);
-        frames.push({
-          data: copy,
-          timestamp: (i - 1) * intervalSeconds,
-        });
-      }
-      await ffmpeg.deleteFile(filename);
-    } catch {
-      break;
-    }
-  }
-
-  try {
-    await ffmpeg.deleteFile('input.mp4');
-  } catch {}
-
-  onProgress?.(`Extracted ${frames.length} frames.`);
-
-  // Terminate to free memory.
-  await resetFfmpeg();
-
-  return frames;
+  return allFrames;
 }
