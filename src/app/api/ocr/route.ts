@@ -2,17 +2,13 @@
  * POST /api/ocr
  *
  * Extracts text from video frames using Google Gemini Vision.
- * Gemini is multimodal — it can read text from images in ANY language
- * (Chinese, Japanese, Korean, English, etc.) and handles complex backgrounds
- * far better than Tesseract.
+ * Returns a deduplicated chronological narrative — if the same text
+ * appears in consecutive frames, it's only included once.
  *
  * Uses the existing GEMINI_API_KEY (no new API key needed).
  *
  * Request:  { "frames": [{ "data": "base64...", "timestamp": 0 }, ...] }
- * Response: { "ocrText": "combined text from all frames" }
- *
- * Cost: Free tier supports 15 requests/minute. Each request handles up to
- * 10 frames, so 57 frames = 6 requests ≈ 1-2 minutes total.
+ * Response: { "ocrText": "chronological text narrative (no frame markers)" }
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -57,26 +53,22 @@ export async function POST(request: NextRequest) {
     console.log(`[OCR] Batch ${batchNum}/${totalBatches}: ${batch.length} frames`);
 
     try {
-      // Build the prompt with inline images.
       const promptParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
 
       promptParts.push({
-        text: `You are an OCR engine. Extract ALL text visible in these ${batch.length} images from a cooking video. 
+        text: `You are an OCR engine. These ${batch.length} images are consecutive frames from a cooking video (captured every 0.5 seconds).
 
 Rules:
-- Extract text in ANY language (Chinese, Japanese, Korean, English, etc.)
-- Preserve the original text exactly as shown — do not translate
+- Extract ALL text visible in the images — in ANY language (Chinese, Japanese, Korean, English, etc.)
+- Preserve the original text exactly as shown — do NOT translate
 - Include numbers, measurements, and units exactly as they appear
-- Ignore watermarks, usernames, and UI elements
-- If text appears in multiple frames, deduplicate it
-- Return ONLY the extracted text, one piece per line, no explanations
-- If no text is visible, return an empty response
-
-Format each text block as:
-[Frame @ Xs]
-<extracted text>
-
-Where X is the timestamp in seconds.`,
+- Ignore watermarks, usernames, timestamps, and UI elements
+- DEDUPLICATE: if the same text appears in multiple consecutive frames, only output it ONCE
+- Write the text as a flowing narrative, chronologically as it appears in the video
+- Do NOT include frame numbers, timestamps, or any metadata — just the text content
+- Separate distinct pieces of text with a blank line
+- If no text is visible in any frame, return an empty response
+- Return ONLY the extracted text, no explanations or formatting`,
       });
 
       // Add each frame as an inline image.
@@ -102,7 +94,6 @@ Where X is the timestamp in seconds.`,
       }
     } catch (err) {
       console.error(`[OCR] Batch ${batchNum} failed:`, (err as Error).message);
-      // Continue to next batch.
     }
 
     // Rate limit: wait 500ms between batches to stay under 15 RPM.
@@ -111,8 +102,26 @@ Where X is the timestamp in seconds.`,
     }
   }
 
-  const combinedText = allTextParts.join('\n\n---\n\n');
-  console.log(`[OCR] Complete: ${allTextParts.length} batches, ${combinedText.length} total chars`);
+  // Merge all batch results and deduplicate across batches.
+  // Each batch already deduplicates within itself; here we handle
+  // overlap between consecutive batches (same text at the end of one
+  // batch and start of the next).
+  let combinedText = allTextParts.join('\n\n');
+
+  // Remove exact duplicate consecutive lines.
+  const lines = combinedText.split('\n');
+  const dedupedLines: string[] = [];
+  let prevLine = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed !== prevLine || trimmed === '') {
+      dedupedLines.push(line);
+      prevLine = trimmed;
+    }
+  }
+  combinedText = dedupedLines.join('\n').trim();
+
+  console.log(`[OCR] Complete: ${allTextParts.length} batches, ${combinedText.length} chars (deduplicated)`);
 
   return NextResponse.json({ ocrText: combinedText });
 }
