@@ -67,6 +67,8 @@ export interface RecipeFlag {
 export interface GeneratedRecipe {
   title: string;
   description: string;
+  foodHint?: boolean;
+  needsOcr?: boolean;
   ingredients: RecipeIngredient[];
   instructions: RecipeInstruction[];
   metadata: RecipeMetadata[];

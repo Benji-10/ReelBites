@@ -54,10 +54,12 @@ CRITICAL RULES — FOLLOW THESE EXACTLY:
 2. If an ingredient is mentioned but its amount is NOT specified, MAKE UP a realistic quantity based on your cooking knowledge (e.g. "salt" → 1 tsp, "olive oil" → 2 tbsp, "onion" → 1). Set "flag" to "estimated_amount" to indicate it was estimated, not from the source.
 3. If a step is vague (e.g. "cook until done" with no time), include it but add a flag of type "vague_instruction".
 4. For EVERY ingredient, instruction, and metadata field, include an "evidence" string that cites which source the info came from: "caption", "transcript", "ocr", "comments", or "estimated".
-5. If the reel is NOT a recipe (e.g. it's a lifestyle video, an ad, etc.), still output the JSON but set title to "Not a recipe" and add a flag of type "not_a_recipe". HOWEVER: if the caption or transcript mentions food, cooking, or recipe-related terms (even in other languages like Chinese 鬆餅/食譜, Japanese レシピ, etc.), do NOT mark it as "not_a_recipe" — the recipe may be shown on-screen. Instead, extract whatever you can and set the title to "Recipe extraction incomplete" with a flag of type "needs_ocr".
-6. Do NOT include units in the "amount" field — put the unit in "unit". E.g. { amount: "2", unit: "cups" }, not { amount: "2 cups" }.
-7. Amount should be a number or simple fraction (e.g. "2", "0.5", "1.5"). Unit should be standard (cups, tbsp, tsp, oz, g, ml, pieces, cloves, etc.).
-8. Return ONLY the JSON object, no markdown fences, no preamble.
+5. Set "food_hint" to true if the caption, transcript, or comments mention food, cooking, or recipe-related terms in ANY language (e.g. 鬆餅, 食譜, レシピ, pancake, bake, etc.). Set it to false only if the video is clearly not food-related (e.g. a travel vlog, fitness video, ad).
+6. If "food_hint" is true but you cannot extract a complete recipe from the text sources, set "needs_ocr" to true — the recipe may be shown on-screen as text overlays.
+7. If "food_hint" is false, set title to "Not a recipe" and add a flag of type "not_a_recipe".
+8. Do NOT include units in the "amount" field — put the unit in "unit". E.g. { amount: "2", unit: "cups" }, not { amount: "2 cups" }.
+9. Amount should be a number or simple fraction (e.g. "2", "0.5", "1.5"). Unit should be standard (cups, tbsp, tsp, oz, g, ml, pieces, cloves, etc.).
+10. Return ONLY the JSON object, no markdown fences, no preamble.
 
 SOURCES:
 
@@ -80,14 +82,16 @@ OUTPUT FORMAT (JSON):
 {
   "title": "string — the recipe name",
   "description": "string — 1-2 sentence summary of the dish",
+  "food_hint": true,
+  "needs_ocr": false,
   "ingredients": [
     {
       "name": "string",
       "amount": "string | null",
       "unit": "string | null",
       "notes": "string | null",
-      "evidence": "caption | transcript | ocr | comments",
-      "flag": "missing_amount | null"
+      "evidence": "caption | transcript | ocr | comments | estimated",
+      "flag": "estimated_amount | null"
     }
   ],
   "instructions": [
@@ -107,7 +111,7 @@ OUTPUT FORMAT (JSON):
   ],
   "flags": [
     {
-      "type": "missing_amount | vague_instruction | not_a_recipe | missing_step | unclear_ingredient | etc",
+      "type": "estimated_amount | vague_instruction | not_a_recipe | needs_ocr | missing_step | unclear_ingredient | etc",
       "message": "string — human-readable explanation",
       "field": "ingredients[0] | instructions[2] | etc",
       "severity": "info | warning | error"
@@ -121,6 +125,8 @@ Remember: ONLY return the JSON. No markdown, no explanation.`;
 interface GeminiRecipeResponse {
   title: string;
   description: string;
+  food_hint?: boolean;
+  needs_ocr?: boolean;
   ingredients: RecipeIngredient[];
   instructions: RecipeInstruction[];
   metadata: RecipeMetadata[];
@@ -212,6 +218,8 @@ export async function generateRecipe(args: {
   return {
     title: parsed.title,
     description: parsed.description,
+    foodHint: parsed.food_hint ?? false,
+    needsOcr: parsed.needs_ocr ?? false,
     ingredients: parsed.ingredients,
     instructions: parsed.instructions,
     metadata: parsed.metadata,
