@@ -206,63 +206,18 @@ export async function runClientPipeline(
     progress: 60,
   });
 
-  // Step 5: Extract video frames with ffmpeg.wasm (client-side).
-  let ocrText = '';
-  let frames: { data: Uint8Array; timestamp: number }[] = [];
-  try {
-    onProgress({
-      step: 'frames',
-      message: 'Extracting video frames (every 0.5s)...',
-      progress: 62,
-    });
-
-    // 0.5-second interval for better coverage of fast-paced reels.
-    // Max 120 frames (covers up to 60 seconds of video).
-    frames = await extractFrames(videoData, 0.5, 120, (msg) =>
-      onProgress({ step: 'frames', message: msg, progress: 68 }),
-    );
-
-    // Step 6: Run OCR on frames (client-side Tesseract.js, batch parallel).
-    if (frames.length > 0) {
-      onProgress({
-        step: 'ocr',
-        message: `Analyzing ${frames.length} frames (batch parallel OCR)...`,
-        progress: 70,
-      });
-
-      // The OCR callback now includes a percent (0-100) for the OCR phase.
-      // Map it to the overall pipeline progress: 70% (start) → 85% (end).
-      ocrText = await ocrFrames(frames, (msg, ocrPercent) => {
-        const mappedPercent = 70 + Math.round((ocrPercent || 0) * 0.15);
-        onProgress({ step: 'ocr', message: msg, progress: mappedPercent });
-      });
-    } else {
-      onProgress({
-        step: 'ocr',
-        message: 'No frames extracted, skipping OCR.',
-        progress: 85,
-      });
-    }
-  } catch (err) {
-    console.warn('[pipeline] Frame extraction/OCR failed:', err);
-    onProgress({
-      step: 'ocr',
-      message: `OCR skipped: ${(err as Error).message.slice(0, 80)}. Continuing with caption + transcript.`,
-      progress: 85,
-    });
-  }
-
-  // Step 7: Generate recipe via server API (Gemini).
+  // Step 5: Generate recipe via Gemini — WITHOUT OCR first.
+  // Most recipe reels have the recipe in the caption, transcript, or author
+  // comments. Frame extraction + OCR is slow (2-5 minutes) and often fails.
+  // By trying Gemini first, we can skip OCR entirely for most reels.
   onProgress({
     step: 'gemini',
-    message: 'Generating structured recipe with Gemini...',
-    progress: 88,
+    message: 'Generating recipe from caption + transcript + comments...',
+    progress: 65,
   });
 
   // Filter comments for Gemini: only send author comments that contain
-  // recipe-related keywords. This ensures Gemini focuses on the actual recipe
-  // (often written by the creator in a pinned comment) rather than random
-  // viewer comments.
+  // recipe-related keywords.
   const RECIPE_KEYWORDS = ['recipe', 'ingredients', 'cup', 'tbsp', 'tsp', 'gram', 'oz', 'lb', 'kg', 'ml', 'temperature', 'bake', 'cook', 'fry', 'mix', 'add', 'stir', 'oven', 'minutes', 'hours', 'serves', 'servings'];
 
   const allComments = post.comments || [];
@@ -271,9 +226,6 @@ export async function runClientPipeline(
     const lowerText = c.text.toLowerCase();
     return RECIPE_KEYWORDS.some((kw) => lowerText.includes(kw));
   });
-
-  // If no author comments matched keywords, send ALL author comments
-  // (the author might have written the recipe without using standard keywords).
   const finalCommentsForGemini = commentsForGemini.length > 0 ? commentsForGemini : authorComments;
 
   console.log('[pipeline] === COMMENT FILTERING ===');
@@ -288,36 +240,32 @@ export async function runClientPipeline(
     text: c.text,
     matchedKeywords: RECIPE_KEYWORDS.filter(kw => c.text.toLowerCase().includes(kw)),
   })));
-  console.log('[pipeline] Final comments for Gemini:', finalCommentsForGemini.map(c => ({
-    author: c.author,
-    text: c.text,
-  })));
   console.log('[pipeline] === END COMMENT FILTERING ===');
 
-  const generateResponse = await fetch('/api/generate', {
+  // First attempt: caption + transcript + comments (no OCR).
+  const firstResponse = await fetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       caption: post.caption,
       comments: finalCommentsForGemini,
       transcript,
-      ocrText,
+      ocrText: '', // No OCR yet.
       sourceUrl: instagramUrl,
     }),
   });
 
-  if (!generateResponse.ok) {
-    const errorData = await generateResponse.json().catch(() => ({ error: 'Recipe generation failed.' }));
-    throw new Error(errorData.error || `Generation failed: HTTP ${generateResponse.status}`);
+  if (!firstResponse.ok) {
+    const errorData = await firstResponse.json().catch(() => ({ error: 'Recipe generation failed.' }));
+    throw new Error(errorData.error || `Generation failed: HTTP ${firstResponse.status}`);
   }
 
-  const { recipe } = (await generateResponse.json()) as { recipe: GeneratedRecipe };
-
-  // Attach source metadata.
+  const firstResult = (await firstResponse.json()) as { recipe: GeneratedRecipe };
+  let recipe = firstResult.recipe;
   recipe.imageUrl = post.thumbnailUrl;
   recipe.sourceVideoUrl = post.videoUrl;
 
-  // Check if Gemini determined this is NOT a recipe.
+  // Check if this is NOT a recipe at all.
   const isNotRecipe =
     recipe.title.toLowerCase().includes('not a recipe') ||
     recipe.flags.some((f) => f.type === 'not_a_recipe');
@@ -325,11 +273,93 @@ export async function runClientPipeline(
   if (isNotRecipe) {
     onProgress({
       step: 'done',
-      message: 'This video doesn\'t appear to be a recipe. Not saving.',
+      message: "This video doesn't appear to be a recipe. Not saving.",
       progress: 100,
     });
-    // Return the recipe but mark it — the caller should NOT save it.
     return { recipe, post, isRecipe: false };
+  }
+
+  // Check if the recipe is "complete enough" — does it have ingredients with
+  // amounts and at least 2 instructions?
+  const hasGoodIngredients = recipe.ingredients.length >= 2 &&
+    recipe.ingredients.some((ing) => ing.amount || ing.flag === 'estimated_amount');
+  const hasGoodInstructions = recipe.instructions.length >= 2;
+
+  if (hasGoodIngredients && hasGoodInstructions) {
+    // We got a good recipe without OCR — skip frame extraction entirely!
+    console.log('[pipeline] Recipe looks complete without OCR. Skipping frame extraction.');
+    onProgress({
+      step: 'done',
+      message: 'Recipe extracted successfully (no OCR needed).',
+      progress: 100,
+    });
+    return { recipe, post, isRecipe: true };
+  }
+
+  // Step 6: Recipe was incomplete — extract frames and run OCR.
+  console.log('[pipeline] Recipe incomplete (missing ingredients or steps). Running OCR...');
+  onProgress({
+    step: 'frames',
+    message: 'Recipe needs more data. Extracting video frames for OCR...',
+    progress: 70,
+  });
+
+  let ocrText = '';
+  try {
+    const frames = await extractFrames(videoData, 0.5, 120, (msg) =>
+      onProgress({ step: 'frames', message: msg, progress: 75 }),
+    );
+
+    if (frames.length > 0) {
+      onProgress({
+        step: 'ocr',
+        message: `Analyzing ${frames.length} frames (batch parallel OCR)...`,
+        progress: 80,
+      });
+
+      ocrText = await ocrFrames(frames, (msg, ocrPercent) => {
+        const mappedPercent = 80 + Math.round((ocrPercent || 0) * 0.1);
+        onProgress({ step: 'ocr', message: msg, progress: mappedPercent });
+      });
+    }
+  } catch (err) {
+    console.warn('[pipeline] Frame extraction/OCR failed:', err);
+    onProgress({
+      step: 'ocr',
+      message: `OCR skipped: ${(err as Error).message.slice(0, 60)}. Using initial recipe.`,
+      progress: 90,
+    });
+  }
+
+  // Step 7: Re-generate recipe WITH OCR text.
+  if (ocrText.length > 0) {
+    onProgress({
+      step: 'gemini',
+      message: 'Re-generating recipe with OCR data...',
+      progress: 92,
+    });
+
+    const secondResponse = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        caption: post.caption,
+        comments: finalCommentsForGemini,
+        transcript,
+        ocrText,
+        sourceUrl: instagramUrl,
+      }),
+    });
+
+    if (secondResponse.ok) {
+      const secondResult = (await secondResponse.json()) as { recipe: GeneratedRecipe };
+      // Only use the second result if it's better (more ingredients).
+      if (secondResult.recipe.ingredients.length >= recipe.ingredients.length) {
+        recipe = secondResult.recipe;
+        recipe.imageUrl = post.thumbnailUrl;
+        recipe.sourceVideoUrl = post.videoUrl;
+      }
+    }
   }
 
   onProgress({

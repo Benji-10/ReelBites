@@ -405,7 +405,7 @@ export async function extractFrames(
       // Use -ss (seek) BEFORE -i for fast seeking, then extract frames
       // from the chunk only. This is much more memory-efficient than
       // the fps filter which decodes the entire video.
-      await ffmpeg.exec([
+      const execPromise = ffmpeg.exec([
         '-ss', String(chunkStart),
         '-i', 'input.mp4',
         '-t', String(CHUNK_DURATION),
@@ -414,6 +414,13 @@ export async function extractFrames(
         '-q:v', '5',
         'frame_%04d.jpg',
       ]);
+
+      // Per-chunk timeout: 30 seconds. If a chunk takes longer, it's hung.
+      const chunkTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`Chunk ${chunkIdx + 1} timed out after 30s`)), 30000);
+      });
+
+      await Promise.race([execPromise, chunkTimeout]);
 
       // Read the frames from this chunk.
       for (let i = 1; i <= chunkFrameCount; i++) {
