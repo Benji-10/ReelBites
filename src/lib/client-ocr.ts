@@ -146,6 +146,17 @@ export async function ocrFrames(
 
   onProgress?.(`OCR: ${frames.length} frames, processing in batches of ${BATCH_SIZE}...`, 0);
 
+  // Suppress Tesseract WASM warnings about legacy parameters.
+  // These are harmless (deprecated C++ params not in the WASM build) but noisy.
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    const msg = String(args[0] || '');
+    if (msg.includes('Parameter not found') || msg.includes('tesseract-core')) return;
+    originalWarn(...args);
+  };
+
+  try {
+
   // Step 1: Preprocess all frames.
   onProgress?.('OCR: Preprocessing frames...', 5);
   const processedFrames: { url: string; timestamp: number }[] = [];
@@ -228,4 +239,8 @@ export async function ocrFrames(
   );
 
   return combinedText;
+  } finally {
+    // Restore original console.warn.
+    console.warn = originalWarn;
+  }
 }
