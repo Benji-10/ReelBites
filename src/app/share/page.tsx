@@ -12,7 +12,7 @@ function ShareHandler() {
     const url = searchParams.get('url') || searchParams.get('text') || searchParams.get('title') || '';
 
     // Try to extract an Instagram URL from the shared text.
-    const instagramMatch = url.includes('instagram.com/reel')/*match(/https?:\/\/(?:www\.)?instagram\.com\/(?:reel|reels|p|tv)\/[A-Za-z0-9_-]+/);*/
+    const instagramMatch = url.match(/https?:\/\/(?:www\.)?instagram\.com\/(?:reel|reels|p|tv)\/[A-Za-z0-9_-]+/);
 
     if (instagramMatch) {
       const reelUrl = instagramMatch[0];
