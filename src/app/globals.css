@@ -233,6 +233,13 @@ button:disabled,
   cursor: not-allowed;
 }
 
+/* Hide the Netlify deploy badge */
+.netlify-badge,
+[id*="netlify-badge"],
+[class*="netlify-badge"] {
+  display: none !important;
+}
+
 /* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;

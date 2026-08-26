@@ -34,10 +34,13 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
     { key: 'berry', label: 'Berry', color: 'bg-pink-500' },
   ] as const;
 
+  // Only show settings/theme/palette for logged-in users (reduces mobile overflow).
+  const showExtraControls = isReady && !!user;
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-md">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 items-center justify-between gap-4">
+      <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
+        <div className="flex h-16 items-center justify-between gap-2">
           {/* Logo */}
           <button
             onClick={() => setView({ name: 'extract' })}
@@ -50,12 +53,12 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
           </button>
 
           {/* Nav */}
-          <nav className="flex items-center gap-1">
+          <nav className="flex items-center gap-1 shrink-0">
             <Button
               variant={view.name === 'extract' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setView({ name: 'extract' })}
-              className="gap-1.5"
+              className="gap-1.5 px-2 sm:px-3"
             >
               <Sparkles className="h-4 w-4" />
               <span className="hidden sm:inline">Extract</span>
@@ -64,12 +67,12 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
               variant={view.name === 'box' || view.name === 'detail' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setView({ name: 'box' })}
-              className="gap-1.5"
+              className="gap-1.5 px-2 sm:px-3"
             >
               <BookOpen className="h-4 w-4" />
-              <span className="hidden sm:inline">Recipe Box</span>
+              <span className="hidden sm:inline">Recipes</span>
               {recipes.length > 0 && (
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
                   {recipes.length}
                 </Badge>
               )}
@@ -77,40 +80,42 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
           </nav>
 
           {/* Right side */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {/* Settings */}
-            <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9">
-              <Settings className="h-4 w-4" />
-            </Button>
-
-            {/* Theme toggle */}
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Theme toggle — always visible (small) */}
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-9 w-9">
               {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
 
-            {/* Color theme picker */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-9 w-9">
-                  <Palette className="h-4 w-4" />
+            {/* Settings + Color palette — only for logged-in users */}
+            {showExtraControls && (
+              <>
+                <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9 hidden sm:flex">
+                  <Settings className="h-4 w-4" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Color Theme</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {colorThemes.map((t) => (
-                  <DropdownMenuItem
-                    key={t.key}
-                    onClick={() => setColorTheme(t.key)}
-                    className="gap-2 cursor-pointer"
-                  >
-                    <div className={`h-4 w-4 rounded-full ${t.color}`} />
-                    {t.label}
-                    {colorTheme === t.key && <span className="ml-auto text-xs">✓</span>}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 hidden sm:flex">
+                      <Palette className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>Color Theme</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {colorThemes.map((t) => (
+                      <DropdownMenuItem
+                        key={t.key}
+                        onClick={() => setColorTheme(t.key)}
+                        className="gap-2 cursor-pointer"
+                      >
+                        <div className={`h-4 w-4 rounded-full ${t.color}`} />
+                        {t.label}
+                        {colorTheme === t.key && <span className="ml-auto text-xs">✓</span>}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
 
             {/* Auth */}
             {isReady && user ? (
@@ -118,14 +123,9 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
                 <LogOut className="h-4 w-4" />
               </Button>
             ) : isReady && !user ? (
-              <div className="flex items-center gap-1.5">
-                <Button variant="ghost" size="sm" onClick={onLogin} className="text-xs">
-                  Log in
-                </Button>
-                <Button size="sm" onClick={onSignup} className="text-xs">
-                  Sign up
-                </Button>
-              </div>
+              <Button size="sm" onClick={onSignup} className="text-xs px-3">
+                Sign up
+              </Button>
             ) : null}
           </div>
         </div>
