@@ -84,7 +84,9 @@ export async function runClientPipeline(
       progress: 20,
     });
 
-    // Step 2: Download the video (via server proxy).
+    // Step 2: Download the video AND fetch comments IN PARALLEL.
+    // This saves time — the comment scraper takes 30-60s and runs
+    // concurrently with the video download.
     onProgress({
       step: 'download',
       message: 'Downloading video file...',
@@ -92,9 +94,50 @@ export async function runClientPipeline(
     });
 
     try {
-      videoData = await downloadVideo(post.videoUrl, (msg) =>
-        onProgress({ step: 'download', message: msg, progress: 30 }),
-      );
+      // Start both operations in parallel.
+      const [videoResult, commentsResult] = await Promise.all([
+        downloadVideo(post.videoUrl, (msg) =>
+          onProgress({ step: 'download', message: msg, progress: 30 }),
+        ),
+        (async () => {
+          try {
+            onProgress({ step: 'scrape', message: 'Fetching comments...', progress: 15 });
+            const commentsResponse = await fetch('/api/comments', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: instagramUrl, author: post.author }),
+            });
+            if (commentsResponse.ok) {
+              const data = await commentsResponse.json();
+              if (data.comments && data.comments.length > 0) {
+                // Sort: author first, then pinned, then by likes.
+                data.comments.sort((a: InstagramComment, b: InstagramComment) => {
+                  if (a.isAuthor && !b.isAuthor) return -1;
+                  if (!a.isAuthor && b.isAuthor) return 1;
+                  if (a.isPinned && !b.isPinned) return -1;
+                  if (!a.isPinned && b.isPinned) return 1;
+                  return b.likes - a.likes;
+                });
+                post.comments = data.comments.slice(0, 10);
+                console.log('[pipeline] Comments fetched separately:', {
+                  total: data.comments.length,
+                  authorComments: data.comments.filter((c: InstagramComment) => c.isAuthor).length,
+                  topComments: post.comments.length,
+                });
+                onProgress({
+                  step: 'scrape',
+                  message: `Found ${data.comments.length} comments (${data.comments.filter((c: InstagramComment) => c.isAuthor).length} from author).`,
+                  progress: 20,
+                });
+              }
+            }
+          } catch (err) {
+            console.warn('[pipeline] Comment fetch failed:', err);
+          }
+        })(),
+      ]);
+
+      videoData = videoResult;
       break; // Success — exit the retry loop.
     } catch (err) {
       const downloadError = err as Error & { shouldRescrape?: boolean };

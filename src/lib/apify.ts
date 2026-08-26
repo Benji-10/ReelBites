@@ -244,7 +244,7 @@ function extractComments(item: ApifyReelResult): InstagramComment[] {
  * @param token - Apify API token
  * @param postAuthor - The post author's username (for isAuthor flag)
  */
-async function fetchComments(
+export async function fetchComments(
   instagramUrl: string,
   token: string,
   postAuthor: string | null,
@@ -284,6 +284,14 @@ async function fetchComments(
           startUrls: [normalizedUrl],
           fetchReplies: false,
           maxItems: 100,
+        };
+      } else if (actorId === 'supreme_coder/instagram-comments-scraper') {
+        // This actor uses `urls` (not startUrls/directUrls) and `limitPerSource`.
+        // Leave limitPerSource unset to fetch ALL comments.
+        input = {
+          urls: [normalizedUrl],
+          scrapeReplies: false,
+          // limitPerSource omitted = fetch all available comments
         };
       } else {
         // Default: instagram-comment-scraper format.
@@ -326,7 +334,10 @@ async function fetchComments(
           const text = ((c.text as string) || '').trim();
           const author = (c.ownerUsername as string) || 'unknown';
           const likes = (c.likesCount as number) || 0;
-          const isPinned = c.pinnedByOwner === true;
+          // Different actors use different field names for "pinned":
+          // - apify/* uses `pinnedByOwner`
+          // - supreme_coder uses `isRanked` (top/ranked comment)
+          const isPinned = c.pinnedByOwner === true || c.isRanked === true;
           const isAuthor = postAuthor ? author === postAuthor : false;
           return { text, author, likes, isPinned, isAuthor };
         })
@@ -443,44 +454,19 @@ export async function scrapeInstagramPost(
   const caption = result.caption || null;
   const postAuthor = result.ownerUsername || result.owner?.username || null;
 
-  // ALWAYS use the dedicated comment scraper instead of the reel-scraper's
-  // `latestComments`. The reel-scraper only returns the 10 most RECENT
-  // comments, which often misses the author's pinned recipe comment.
-  // The comment scraper fetches all comments sorted by likes and is more
-  // reliable for finding author comments.
-  let topComments: InstagramComment[] = [];
-  try {
-    onProgress?.('Fetching comments via dedicated comment scraper...');
-    const fetchedComments = await fetchComments(instagramUrl, token!, postAuthor);
-
-    // Sort: author comments first, then pinned, then by likes descending.
-    fetchedComments.sort((a, b) => {
-      if (a.isAuthor && !b.isAuthor) return -1;
-      if (!a.isAuthor && b.isAuthor) return 1;
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return b.likes - a.likes;
-    });
-    topComments = fetchedComments.slice(0, 10);
-
-    console.log('[Apify] Comments from dedicated scraper:', {
-      total: fetchedComments.length,
-      authorComments: fetchedComments.filter((c) => c.isAuthor).length,
-      topCommentsCount: topComments.length,
-    });
-  } catch (err) {
-    console.warn('[Apify] Comment scraper failed, falling back to latestComments:', (err as Error).message);
-    // Fall back to the reel-scraper's comments if the dedicated scraper fails.
-    const fallbackComments = extractComments(result);
-    fallbackComments.sort((a, b) => {
-      if (a.isAuthor && !b.isAuthor) return -1;
-      if (!a.isAuthor && b.isAuthor) return 1;
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return b.likes - a.likes;
-    });
-    topComments = fallbackComments.slice(0, 10);
-  }
+  // Use the reel-scraper's latestComments as a fallback.
+  // The client will call /api/comments separately to fetch ALL comments
+  // (including the author's pinned recipe comment) via the dedicated
+  // comment scraper. This prevents 504 timeouts on the /api/scrape endpoint.
+  const fallbackComments = extractComments(result);
+  fallbackComments.sort((a, b) => {
+    if (a.isAuthor && !b.isAuthor) return -1;
+    if (!a.isAuthor && b.isAuthor) return 1;
+    if (a.isPinned && !b.isPinned) return -1;
+    if (!a.isPinned && b.isPinned) return 1;
+    return b.likes - a.likes;
+  });
+  const topComments = fallbackComments.slice(0, 10);
 
   // If we still don't have a video URL, throw a detailed error.
   if (!videoUrl) {
