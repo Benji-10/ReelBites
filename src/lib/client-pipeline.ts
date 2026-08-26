@@ -67,6 +67,11 @@ export async function runClientPipeline(
     const scrapeResult = (await scrapeResponse.json()) as { post: InstagramPost };
     post = scrapeResult.post;
 
+    // Log all comments from the scrape result.
+    console.log('[pipeline] All comments from Apify:', JSON.stringify(post.comments, null, 2));
+    console.log('[pipeline] Post author:', post.author);
+    console.log('[pipeline] Comment authors:', post.comments?.map(c => ({ author: c.author, isAuthor: c.isAuthor, isPinned: c.isPinned, textPreview: c.text.slice(0, 60) })));
+
     if (!post.videoUrl) {
       throw new Error(
         'No video URL found in the Instagram post. The post may not contain a video.',
@@ -217,25 +222,42 @@ export async function runClientPipeline(
   // (often written by the creator in a pinned comment) rather than random
   // viewer comments.
   const RECIPE_KEYWORDS = ['recipe', 'ingredients', 'cup', 'tbsp', 'tsp', 'gram', 'oz', 'lb', 'kg', 'ml', 'temperature', 'bake', 'cook', 'fry', 'mix', 'add', 'stir', 'oven', 'minutes', 'hours', 'serves', 'servings'];
-  const commentsForGemini = (post.comments || []).filter((c) => {
-    if (!c.isAuthor) return false;
+
+  const allComments = post.comments || [];
+  const authorComments = allComments.filter((c) => c.isAuthor);
+  const commentsForGemini = authorComments.filter((c) => {
     const lowerText = c.text.toLowerCase();
     return RECIPE_KEYWORDS.some((kw) => lowerText.includes(kw));
   });
 
-  console.log('[pipeline] Comments for Gemini:', {
-    total: post.comments?.length || 0,
-    authorComments: (post.comments || []).filter((c) => c.isAuthor).length,
-    recipeKeywordMatched: commentsForGemini.length,
-    comments: commentsForGemini.map((c) => ({ author: c.author, textPreview: c.text.slice(0, 80) })),
-  });
+  // If no author comments matched keywords, send ALL author comments
+  // (the author might have written the recipe without using standard keywords).
+  const finalCommentsForGemini = commentsForGemini.length > 0 ? commentsForGemini : authorComments;
+
+  console.log('[pipeline] === COMMENT FILTERING ===');
+  console.log('[pipeline] Total comments from Apify:', allComments.length);
+  console.log('[pipeline] Author comments:', authorComments.length);
+  console.log('[pipeline] Author comments with recipe keywords:', commentsForGemini.length);
+  console.log('[pipeline] Final comments sent to Gemini:', finalCommentsForGemini.length);
+  console.log('[pipeline] Author comments detail:', authorComments.map(c => ({
+    author: c.author,
+    isAuthor: c.isAuthor,
+    isPinned: c.isPinned,
+    text: c.text,
+    matchedKeywords: RECIPE_KEYWORDS.filter(kw => c.text.toLowerCase().includes(kw)),
+  })));
+  console.log('[pipeline] Final comments for Gemini:', finalCommentsForGemini.map(c => ({
+    author: c.author,
+    text: c.text,
+  })));
+  console.log('[pipeline] === END COMMENT FILTERING ===');
 
   const generateResponse = await fetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       caption: post.caption,
-      comments: commentsForGemini,
+      comments: finalCommentsForGemini,
       transcript,
       ocrText,
       sourceUrl: instagramUrl,
