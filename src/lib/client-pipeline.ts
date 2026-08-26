@@ -337,6 +337,9 @@ export async function runClientPipeline(
     );
 
     if (frames.length > 0) {
+      // Sort frames by timestamp (extraction is interleaved, so they're not in order).
+      frames.sort((a, b) => a.timestamp - b.timestamp);
+
       onProgress({
         step: 'ocr',
         message: `Analyzing ${frames.length} frames with Gemini Vision...`,

@@ -40,6 +40,9 @@ export async function GET(request: NextRequest) {
       ocrText: r.ocrText,
       imageUrl: r.imageUrl,
       sourceVideoUrl: r.sourceVideoUrl,
+      isFavorite: r.isFavorite,
+      tags: r.tags as string[] | null,
+      collection: r.collection,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     }));
@@ -69,6 +72,9 @@ export async function POST(request: NextRequest) {
     ocrText?: string;
     imageUrl?: string;
     sourceVideoUrl?: string;
+    isFavorite?: boolean;
+    tags?: string[];
+    collection?: string;
   };
 
   try {
@@ -98,6 +104,9 @@ export async function POST(request: NextRequest) {
         ocrText: body.ocrText || null,
         imageUrl: body.imageUrl || null,
         sourceVideoUrl: body.sourceVideoUrl || null,
+        isFavorite: body.isFavorite || false,
+        tags: (body.tags || null) as never,
+        collection: body.collection || null,
       },
     });
 

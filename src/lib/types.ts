@@ -48,6 +48,7 @@ export interface RecipeInstruction {
   step: string;
   evidence?: string | null;
   flag?: string | null;
+  ingredientRefs?: number[]; // indices of ingredients used in this step
 }
 
 export interface RecipeMetadata {
@@ -97,6 +98,9 @@ export interface SavedRecipe {
   ocrText: string | null;
   imageUrl: string | null;
   sourceVideoUrl: string | null;
+  isFavorite: boolean;
+  tags: string[] | null;
+  collection: string | null;
   createdAt: string;
   updatedAt: string;
 }

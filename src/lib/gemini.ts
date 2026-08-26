@@ -54,13 +54,14 @@ CRITICAL RULES — FOLLOW THESE EXACTLY:
 2. If an ingredient is mentioned but its amount is NOT specified, MAKE UP a realistic quantity based on your cooking knowledge (e.g. "salt" → 1 tsp, "olive oil" → 2 tbsp, "onion" → 1). Set "flag" to "estimated_amount" to indicate only the AMOUNT was estimated (the ingredient itself was mentioned in the source).
 3. If you need to add an ingredient that was NOT mentioned in any source but is clearly needed for the dish (e.g. the video shows pancakes but never mentions "flour"), set "flag" to "estimated_ingredient" to indicate the ENTIRE ingredient was estimated by you. Use this sparingly — only for ingredients that are obviously required.
 4. If a step is vague (e.g. "cook until done" with no time), include it but add a flag of type "vague_instruction".
-5. For EVERY ingredient, instruction, and metadata field, include an "evidence" string that cites which source the info came from: "caption", "transcript", "ocr", "comments", or "estimated".
-6. Set "food_hint" to true if the caption, transcript, or comments mention food, cooking, or recipe-related terms in ANY language (e.g. 鬆餅, 食譜, レシピ, pancake, bake, etc.). Set it to false only if the video is clearly not food-related (e.g. a travel vlog, fitness video, ad).
-7. If "food_hint" is true but you cannot extract a complete recipe from the text sources, set "needs_ocr" to true — the recipe may be shown on-screen as text overlays.
-8. If "food_hint" is false, set title to "Not a recipe" and add a flag of type "not_a_recipe".
-9. Do NOT include units in the "amount" field — put the unit in "unit". E.g. { amount: "2", unit: "cups" }, not { amount: "2 cups" }.
-10. Amount should be a number or simple fraction (e.g. "2", "0.5", "1.5"). Unit should be standard (cups, tbsp, tsp, oz, g, ml, pieces, cloves, etc.).
-11. Return ONLY the JSON object, no markdown fences, no preamble.
+5. For EACH instruction, include "ingredientRefs" — an array of indices (0-based) of the ingredients used in that step. E.g. if step 1 uses flour (index 0) and eggs (index 1), set ingredientRefs to [0, 1]. If a step uses no specific ingredients (e.g. "preheat oven"), set ingredientRefs to [].
+6. For EVERY ingredient, instruction, and metadata field, include an "evidence" string.
+7. Include as much metadata as possible: servings, prepTime, cookTime, totalTime, difficulty (easy/medium/hard), cuisine (e.g. "Japanese", "Italian"), temperature, nutrition (if mentioned), costPerServing (if mentioned), equipment (list any special equipment needed).
+8. Set "food_hint" to true if the caption, transcript, or comments mention food in ANY language.
+9. If "food_hint" is true but you cannot extract a complete recipe, set "needs_ocr" to true.
+10. If "food_hint" is false, set title to "Not a recipe" and add a flag of type "not_a_recipe".
+11. Do NOT include units in the "amount" field — put the unit in "unit".
+12. Return ONLY the JSON object, no markdown fences, no preamble.
 
 SOURCES:
 
@@ -99,12 +100,13 @@ OUTPUT FORMAT (JSON):
     {
       "step": "string — one clear instruction",
       "evidence": "caption | transcript | ocr | comments",
-      "flag": "vague_instruction | null"
+      "flag": "vague_instruction | null",
+      "ingredientRefs": [0, 2, 3]
     }
   ],
   "metadata": [
     {
-      "key": "servings | prepTime | cookTime | temperature | etc",
+      "key": "servings | prepTime | cookTime | totalTime | difficulty | cuisine | temperature | nutrition | costPerServing | equipment",
       "value": "string",
       "evidence": "caption | transcript | ocr | comments",
       "flag": "null"

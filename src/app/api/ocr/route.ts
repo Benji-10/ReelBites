@@ -102,13 +102,46 @@ Rules:
     }
   }
 
-  // Merge all batch results and deduplicate across batches.
-  // Each batch already deduplicates within itself; here we handle
-  // overlap between consecutive batches (same text at the end of one
-  // batch and start of the next).
-  let combinedText = allTextParts.join('\n\n');
+  // If we have multiple batches, use Gemini to consolidate them into
+  // a single deduplicated narrative.
+  let combinedText: string;
 
-  // Remove exact duplicate consecutive lines.
+  if (allTextParts.length > 1) {
+    console.log('[OCR] Consolidating batch results with Gemini...');
+
+    try {
+      const consolidateResult = await model.generateContent({
+        contents: [{
+          role: 'user',
+          parts: [{
+            text: `Below is OCR text extracted from multiple batches of video frames. The batches overlap — the same text appears in multiple batches. Consolidate them into a SINGLE clean narrative.
+
+Rules:
+- Remove ALL duplicates — if the same text appears multiple times, keep it only once
+- Preserve the chronological order (text that appears earlier in the video comes first)
+- Keep the original text exactly — do NOT translate or modify
+- Do NOT add any explanations, headers, or formatting
+- Separate distinct pieces of text with a blank line
+- Return ONLY the consolidated text
+
+Here is the raw OCR text from all batches:
+
+${allTextParts.join('\n\n---\n\n')}`,
+          }],
+        }],
+      });
+
+      combinedText = consolidateResult.response.text().trim();
+      console.log(`[OCR] Consolidated: ${combinedText.length} chars (from ${allTextParts.join('').length} raw)`);
+    } catch (err) {
+      console.warn('[OCR] Consolidation failed, using simple dedup:', err);
+      combinedText = allTextParts.join('\n\n');
+    }
+  } else {
+    combinedText = allTextParts.join('\n\n');
+  }
+
+  // Simple line-level dedup as a final safety net.
   const lines = combinedText.split('\n');
   const dedupedLines: string[] = [];
   let prevLine = '';

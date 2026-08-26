@@ -9,7 +9,7 @@ export function Footer() {
         <p className="text-center text-xs sm:text-sm text-muted-foreground flex items-center justify-center gap-1.5">
           Built with
           <Heart className="h-3.5 w-3.5 text-primary fill-primary" />
-          using Apify, Whisper, Tesseract OCR & Gemini
+          using Apify, Groq Whisper & Gemini Vision
         </p>
       </div>
     </footer>

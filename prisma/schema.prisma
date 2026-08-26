@@ -35,30 +35,37 @@ model Recipe {
   // JSON-encoded array of { name, amount, unit, notes?, evidence?, flag? }
   ingredients Json
 
-  // JSON-encoded array of { step, evidence?, flag? }
+  // JSON-encoded array of { step, evidence?, flag?, ingredientRefs? }
+  // ingredientRefs: array of ingredient indices this step uses
   instructions Json
 
-  // JSON-encoded array of { key, value, evidence?, flag? } for servings, prep time, cook time, etc.
+  // JSON-encoded array of { key, value, evidence?, flag? }
   metadata    Json
 
-  // JSON-encoded array of warning/flag objects produced by the LLM
-  // e.g. { type: "missing_amount", message: "Salt amount not specified", field: "ingredients[2]" }
+  // JSON-encoded array of warning/flag objects
   flags       Json
 
-  // Raw source data kept for traceability
+  // Raw source data
   sourceUrl      String?
   sourceCaption  String?
-  sourceComments Json?    // JSON-encoded array of comments
+  sourceComments Json?
   transcript     String?
   ocrText        String?
 
   imageUrl    String?
   sourceVideoUrl String?
 
+  // User features
+  isFavorite  Boolean  @default(false)
+  tags        Json?    // JSON array of strings: ["quick", "vegetarian", ...]
+  collection  String?  // Custom collection name: "Friday cooking", "Fakeaways", etc.
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([isFavorite])
+  @@index([collection])
 }
 
 model ExtractionJob {

@@ -43,6 +43,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         ocrText: recipe.ocrText,
         imageUrl: recipe.imageUrl,
         sourceVideoUrl: recipe.sourceVideoUrl,
+        isFavorite: recipe.isFavorite,
+        tags: recipe.tags as string[] | null,
+        collection: recipe.collection,
         createdAt: recipe.createdAt.toISOString(),
         updatedAt: recipe.updatedAt.toISOString(),
       },
@@ -75,6 +78,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       'title', 'description', 'ingredients', 'instructions',
       'metadata', 'flags', 'sourceUrl', 'sourceCaption', 'sourceComments',
       'transcript', 'ocrText', 'imageUrl', 'sourceVideoUrl',
+      'isFavorite', 'tags', 'collection',
     ];
 
     const data: Record<string, unknown> = {};
@@ -105,6 +109,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         ocrText: updated.ocrText,
         imageUrl: updated.imageUrl,
         sourceVideoUrl: updated.sourceVideoUrl,
+        isFavorite: updated.isFavorite,
+        tags: updated.tags as string[] | null,
+        collection: updated.collection,
         createdAt: updated.createdAt.toISOString(),
         updatedAt: updated.updatedAt.toISOString(),
       },
