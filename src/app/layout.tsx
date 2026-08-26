@@ -48,8 +48,31 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
         suppressHydrationWarning
       >
-        {/* Theme init script — must be in body, runs before React hydrates */}
+        {/* Theme init script */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* Remove Netlify badge */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              // Remove Netlify badge from DOM
+              function removeNetlifyBadge() {
+                document.querySelectorAll('.nl-wrap, .nl-badge, .nl-card, [id*="nl-"], [class*="nl-wrap"], [class*="nl-badge"]').forEach(function(el) {
+                  el.remove();
+                });
+              }
+              // Run immediately and after a delay (badge is injected async).
+              removeNetlifyBadge();
+              setTimeout(removeNetlifyBadge, 1000);
+              setTimeout(removeNetlifyBadge, 3000);
+              // Also use MutationObserver to catch it when it appears.
+              var observer = new MutationObserver(function() {
+                var badge = document.querySelector('.nl-wrap, .nl-badge');
+                if (badge) { removeNetlifyBadge(); }
+              });
+              observer.observe(document.body, { childList: true, subtree: true });
+            `,
+          }}
+        />
         <script
           dangerouslySetInnerHTML={{
             __html: `

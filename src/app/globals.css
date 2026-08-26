@@ -234,10 +234,19 @@ button:disabled,
 }
 
 /* Hide the Netlify deploy badge */
-.netlify-badge,
-[id*="netlify-badge"],
-[class*="netlify-badge"] {
+.nl-wrap, .nl-badge, .nl-card, .nl-icon-btn,
+[id*="nl-card"], [id*="nl-badge"], [id*="nl-card-close"], [id*="nl-hide"],
+[class*="nl-wrap"], [class*="nl-badge"], [class*="nl-card"],
+[class*="netlify-badge"], [class*="netlify_badge"] {
   display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
 }
 
 /* Custom scrollbar */
