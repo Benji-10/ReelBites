@@ -287,11 +287,12 @@ export async function fetchComments(
         };
       } else if (actorId === 'supreme_coder/instagram-comments-scraper') {
         // This actor uses `urls` (not startUrls/directUrls) and `limitPerSource`.
-        // Leave limitPerSource unset to fetch ALL comments.
+        // Cap at 30 comments — we only use the top 10 for Gemini, and 30 covers
+        // 99% of recipe reels. This reduces cost from ~$0.06 to ~$0.03 per post.
         input = {
           urls: [normalizedUrl],
           scrapeReplies: false,
-          // limitPerSource omitted = fetch all available comments
+          limitPerSource: 30,
         };
       } else {
         // Default: instagram-comment-scraper format.
@@ -311,7 +312,7 @@ export async function fetchComments(
       }
 
       const { items } = await client.dataset(run.defaultDatasetId).listItems({
-        limit: 100,
+        limit: 30, // Only fetch 30 comments (we only use top 10).
       });
 
       console.log(`[Apify] ${actorId} returned`, items.length, 'comments');
@@ -395,16 +396,13 @@ export async function scrapeInstagramPost(
   onProgress?.(`Target: ${normalizedUrl}`);
 
   // The `apify/instagram-reel-scraper` actor accepts direct reel URLs in its
-  // `username` field (yes, it's named `username` even for reel URLs — the
-  // actor's input schema documents it as accepting "username, profile URL,
-  // ID, or reel URL"). The value must be an array of strings.
-  //
-  // Alternative actors using the same input format:
-  //   - apify/instagram-post-scraper (slightly cheaper, ~$0.003/post)
-  //
-  // If you switch actors, also update the env var APIFY_INSTAGRAM_ACTOR.
+  // `username` field. We explicitly DISABLE comment scraping here (scrapeCommentsFirst: false)
+  // because we fetch comments separately via the dedicated comment scraper
+  // (/api/comments endpoint). This saves ~$0.002 per reel by not paying for
+  // comments twice.
   const input = {
     username: [normalizedUrl],
+    scrapeCommentsFirst: false, // Disable — we fetch comments separately.
   };
 
   // Call the actor and wait for it to finish. This typically takes 10-30 seconds.
@@ -452,21 +450,10 @@ export async function scrapeInstagramPost(
   const videoUrl = extractVideoUrl(result);
   const thumbnailUrl = extractThumbnailUrl(result);
   const caption = result.caption || null;
-  const postAuthor = result.ownerUsername || result.owner?.username || null;
 
-  // Use the reel-scraper's latestComments as a fallback.
-  // The client will call /api/comments separately to fetch ALL comments
-  // (including the author's pinned recipe comment) via the dedicated
-  // comment scraper. This prevents 504 timeouts on the /api/scrape endpoint.
-  const fallbackComments = extractComments(result);
-  fallbackComments.sort((a, b) => {
-    if (a.isAuthor && !b.isAuthor) return -1;
-    if (!a.isAuthor && b.isAuthor) return 1;
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return b.likes - a.likes;
-  });
-  const topComments = fallbackComments.slice(0, 10);
+  // Comments are fetched separately via /api/comments to avoid 504 timeouts.
+  // We pass an empty array here — the client will populate it.
+  const topComments: InstagramComment[] = [];
 
   // If we still don't have a video URL, throw a detailed error.
   if (!videoUrl) {
