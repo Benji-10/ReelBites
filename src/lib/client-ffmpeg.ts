@@ -370,73 +370,71 @@ export async function extractFrames(
     chunkCount,
   });
 
-  onProgress?.(`Extracting ${totalFrames} frames in ${chunkCount} chunks...`);
+  onProgress?.(`Extracting ${totalFrames} frames in ${chunkCount} chunks (interleaved)...`);
 
   const allFrames: { data: Uint8Array; timestamp: number }[] = [];
 
-  // Step 2: Extract frames chunk by chunk.
-  for (let chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
-    const chunkStart = chunkIdx * CHUNK_DURATION;
-    const chunkEnd = Math.min(chunkStart + CHUNK_DURATION, duration);
+  // INTERLEAVED chunking: instead of chunking by time (0-5s, 5-10s, 10-15s),
+  // we chunk by frame index mod chunkCount. This way:
+  //   Chunk 0: frames 0, 5, 10, 15, ... (every 5th frame, spread across entire video)
+  //   Chunk 1: frames 1, 6, 11, 16, ...
+  //   Chunk 2: frames 2, 7, 12, 17, ...
+  //
+  // If a chunk fails/times out, we lose frames spread across the entire video
+  // (losing ~1/5 of frames from each 5-second section) instead of losing an
+  // entire 5-second block.
 
-    // Stop if we have enough frames.
+  for (let chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
+    // Build the list of frame timestamps for this chunk (interleaved).
+    const chunkTimestamps: number[] = [];
+    for (let frameIdx = chunkIdx; frameIdx < totalFrames; frameIdx += chunkCount) {
+      if (allFrames.length + chunkTimestamps.length >= maxFrames) break;
+      chunkTimestamps.push(frameIdx * intervalSeconds);
+    }
+
+    if (chunkTimestamps.length === 0) continue;
     if (allFrames.length >= maxFrames) break;
 
-    const chunkFrameCount = Math.min(
-      framesPerChunk,
-      Math.floor((chunkEnd - chunkStart) / intervalSeconds),
-      maxFrames - allFrames.length,
-    );
-
-    if (chunkFrameCount <= 0) break;
-
     onProgress?.(
-      `Chunk ${chunkIdx + 1}/${chunkCount}: frames at ${chunkStart}s–${chunkEnd}s (${chunkFrameCount} frames)...`,
+      `Chunk ${chunkIdx + 1}/${chunkCount}: ${chunkTimestamps.length} frames (interleaved)...`,
     );
 
-    // Load a FRESH ffmpeg instance for each chunk — this is the key to
-    // avoiding the WASM memory crash. Each instance gets a clean heap.
+    // Load a FRESH ffmpeg instance for each chunk.
     const ffmpeg = await getFfmpeg();
     const videoCopy = copyForFfmpeg(videoData);
 
     try {
       await ffmpeg.writeFile('input.mp4', videoCopy);
 
-      // Use -ss (seek) BEFORE -i for fast seeking, then extract frames
-      // from the chunk only. This is much more memory-efficient than
-      // the fps filter which decodes the entire video.
-      const execPromise = ffmpeg.exec([
-        '-ss', String(chunkStart),
-        '-i', 'input.mp4',
-        '-t', String(CHUNK_DURATION),
-        '-vf', `fps=1/${intervalSeconds},scale=480:-1`,
-        '-frames:v', String(chunkFrameCount),
-        '-q:v', '5',
-        'frame_%04d.jpg',
-      ]);
+      // Extract each frame in this chunk by seeking to its timestamp.
+      // We extract one frame at a time to avoid the fps filter memory issue.
+      let framesExtractedThisChunk = 0;
+      for (let i = 0; i < chunkTimestamps.length; i++) {
+        const timestamp = chunkTimestamps[i];
+        const outputName = `f${i}.jpg`;
 
-      // Per-chunk timeout: 30 seconds. If a chunk takes longer, it's hung.
-      const chunkTimeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Chunk ${chunkIdx + 1} timed out after 30s`)), 30000);
-      });
-
-      await Promise.race([execPromise, chunkTimeout]);
-
-      // Read the frames from this chunk.
-      for (let i = 1; i <= chunkFrameCount; i++) {
-        const filename = `frame_${String(i).padStart(4, '0')}.jpg`;
         try {
-          const data = await ffmpeg.readFile(filename);
+          // Seek to the exact timestamp and extract 1 frame.
+          await ffmpeg.exec([
+            '-ss', String(timestamp),
+            '-i', 'input.mp4',
+            '-frames:v', '1',
+            '-vf', 'scale=480:-1',
+            '-q:v', '5',
+            outputName,
+          ]);
+
+          const data = await ffmpeg.readFile(outputName);
           if (data && (data as Uint8Array).length > 0) {
             const rawData = data as Uint8Array;
             const copy = new Uint8Array(rawData.length);
             copy.set(rawData);
-            const timestamp = chunkStart + (i - 1) * intervalSeconds;
             allFrames.push({ data: copy, timestamp });
+            framesExtractedThisChunk++;
           }
-          await ffmpeg.deleteFile(filename);
-        } catch {
-          break;
+          await ffmpeg.deleteFile(outputName);
+        } catch (err) {
+          console.warn(`[extractFrames] Frame at ${timestamp}s failed:`, err);
         }
       }
 
@@ -447,7 +445,7 @@ export async function extractFrames(
       onProgress?.(
         `Extracted ${allFrames.length}/${totalFrames} frames (${pct}%)`,
       );
-      console.log(`[extractFrames] Chunk ${chunkIdx + 1} done: ${allFrames.length}/${totalFrames} total frames`);
+      console.log(`[extractFrames] Chunk ${chunkIdx + 1} done: ${framesExtractedThisChunk}/${chunkTimestamps.length} frames. Total: ${allFrames.length}/${totalFrames}`);
     } catch (err) {
       console.error(`[extractFrames] Chunk ${chunkIdx + 1} failed:`, err);
       // Continue to next chunk — partial results are better than none.

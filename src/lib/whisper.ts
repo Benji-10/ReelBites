@@ -110,6 +110,19 @@ export async function transcribeAudioFromBuffer(
     ),
   );
 
+  // Part: temperature — set to 0 to reduce hallucination on silent audio.
+  // Whisper sometimes hallucinates "thank you for watching" in random languages
+  // when there's no speech. Low temperature helps reduce this.
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="temperature"\r\n\r\n0\r\n`,
+    ),
+  );
+
+  // Part: language — set to null (auto-detect) but we'll filter common
+  // hallucinations after transcription.
+  // No language parameter = auto-detect.
+
   // Part: file (the audio)
   parts.push(
     Buffer.from(
@@ -195,10 +208,43 @@ export async function transcribeAudioFromBuffer(
         textPreview: result.text?.slice(0, 100),
       });
 
-      const text = result.text?.trim() || '';
+      let text = result.text?.trim() || '';
+
+      // Filter common Whisper hallucinations on silent audio.
+      // Whisper often returns these phrases when there's no actual speech.
+      const HALLUCINATIONS = [
+        'thank you for watching',
+        'terima kasih telah menonton',    // Malay
+        '感谢您的观看',                     // Chinese
+        'ご視聴ありがとうございました',       // Japanese
+        '시청해주셔서 감사합니다',           // Korean
+        'gracias por ver',                // Spanish
+        'obrigado por assistir',          // Portuguese
+        'merci de regarder',              // French
+        'danke fürs zuschauen',           // German
+        'धन्यवाद देखने के लिए',           // Hindi
+        'شكرا للمشاهدة',                   // Arabic
+      ];
+
+      const lowerText = text.toLowerCase();
+      const isHallucination = HALLUCINATIONS.some((h) =>
+        lowerText.includes(h.toLowerCase()),
+      );
+
+      // If the ENTIRE transcript is just a hallucination phrase (very short),
+      // treat it as no speech.
+      if (isHallucination && text.length < 80) {
+        log(`attempt-${attempt + 1}`, 'Filtered hallucination', {
+          original: text,
+          reason: 'Likely silent audio — Whisper hallucinated a "thank you" phrase',
+        });
+        text = '';
+      }
+
       log('success', 'Transcription complete', {
         textLength: text.length,
         textPreview: text.slice(0, 200),
+        wasFiltered: text.length === 0 && !!result.text,
       });
 
       return text;

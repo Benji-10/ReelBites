@@ -590,7 +590,12 @@ export function RecipeDetail() {
                         );
                       })()}
                     </span>
-                    <EvidenceTooltip evidence={ing.evidence} flag={ing.flag} notes={ing.notes} />
+                    <EvidenceTooltip
+                      evidence={ing.evidence}
+                      flag={ing.flag}
+                      notes={ing.notes}
+                      ingredientEstimated={ing.flag === 'estimated_ingredient'}
+                    />
                   </label>
                 );
               })}

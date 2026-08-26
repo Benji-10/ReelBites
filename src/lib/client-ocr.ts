@@ -132,7 +132,11 @@ export async function ocrFrames(
   frames: { data: Uint8Array; timestamp: number }[],
   onProgress?: (message: string, percent?: number) => void,
 ): Promise<string> {
-  const lang = process.env.NEXT_PUBLIC_TESSERACT_LANG || 'eng';
+  // Load multiple languages for multilingual OCR.
+  // 'eng+chi_sim+chi_tra+jpn+kor' covers English, Simplified Chinese,
+  // Traditional Chinese, Japanese, and Korean.
+  // Tesseract.js downloads language data on first use (~10-40MB per language).
+  const lang = process.env.NEXT_PUBLIC_TESSERACT_LANG || 'eng+chi_sim+chi_tra+jpn+kor';
 
   if (frames.length === 0) return '';
 
