@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNetlifyIdentity } from '@/hooks/use-netlify-identity';
 import { useStore } from '@/lib/store';
+import { useSettings } from '@/lib/settings';
 import { Navbar } from './navbar';
 import { ExtractorView } from './extractor-view';
 import { RecipeBox } from './recipe-box';
@@ -14,18 +15,36 @@ export function AppShell() {
   const { user, token, isReady, login, signup, logout } = useNetlifyIdentity();
   const { view, setAuthToken, fetchRecipes } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const { loadFromStorage, syncFromServer, syncToServer } = useSettings();
+
+  // Load settings from localStorage on mount.
+  useEffect(() => {
+    loadFromStorage();
+  }, [loadFromStorage]);
 
   // Sync the auth token to the store whenever it changes.
   useEffect(() => {
     setAuthToken(token);
   }, [token, setAuthToken]);
 
-  // Fetch recipes when the user logs in.
+  // When the user logs in, sync settings from the server.
   useEffect(() => {
-    if (user) {
+    if (user && token) {
+      syncFromServer(token);
       fetchRecipes();
     }
-  }, [user, fetchRecipes]);
+  }, [user, token, syncFromServer, fetchRecipes]);
+
+  // Listen for settings changes and sync to server.
+  useEffect(() => {
+    const handleSettingsChange = () => {
+      if (token) {
+        syncToServer(token);
+      }
+    };
+    window.addEventListener('settings-changed', handleSettingsChange);
+    return () => window.removeEventListener('settings-changed', handleSettingsChange);
+  }, [token, syncToServer]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">

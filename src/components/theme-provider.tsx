@@ -1,8 +1,7 @@
 'use client';
 
-/* eslint-disable react-hooks/set-state-in-effect */
-
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect } from 'react';
+import { useSettings } from '@/lib/settings';
 
 type Theme = 'light' | 'dark';
 type ColorTheme = 'default' | 'mocha' | 'forest' | 'berry';
@@ -16,13 +15,14 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
-// This script runs before hydration to set the theme class on <html>.
-// It MUST be in the <body> (not <head>) so it runs before React hydrates.
+// Inline script that runs before hydration to set the theme class on <html>.
 export const themeInitScript = `
 (function() {
   try {
-    var theme = localStorage.getItem('theme') || 'light';
-    var colorTheme = localStorage.getItem('color-theme') || 'default';
+    var raw = localStorage.getItem('realbites-settings');
+    var settings = raw ? JSON.parse(raw) : {};
+    var theme = settings.theme || 'light';
+    var colorTheme = settings.colorTheme || 'default';
     var root = document.documentElement;
     root.classList.remove('dark', 'theme-mocha', 'theme-forest', 'theme-berry');
     if (theme === 'dark') root.classList.add('dark');
@@ -32,18 +32,7 @@ export const themeInitScript = `
 `;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('light');
-  const [colorTheme, setColorThemeState] = useState<ColorTheme>('default');
-
-  // After mount, read the actual theme from localStorage (not DOM).
-  useEffect(() => {
-    try {
-      const savedTheme = (localStorage.getItem('theme') as Theme) || 'light';
-      const savedColor = (localStorage.getItem('color-theme') as ColorTheme) || 'default';
-      setTheme(savedTheme);
-      setColorThemeState(savedColor);
-    } catch {}
-  }, []);
+  const { theme, colorTheme, setSetting } = useSettings();
 
   // Apply theme to DOM whenever it changes.
   useEffect(() => {
@@ -51,14 +40,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.classList.remove('dark', 'theme-mocha', 'theme-forest', 'theme-berry');
     if (theme === 'dark') root.classList.add('dark');
     if (colorTheme !== 'default') root.classList.add(`theme-${colorTheme}`);
-    try {
-      localStorage.setItem('theme', theme);
-      localStorage.setItem('color-theme', colorTheme);
-    } catch {}
   }, [theme, colorTheme]);
 
-  const toggleTheme = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'));
-  const setColorTheme = (t: ColorTheme) => setColorThemeState(t);
+  const toggleTheme = () => setSetting('theme', theme === 'light' ? 'dark' : 'light');
+  const setColorTheme = (t: ColorTheme) => setSetting('colorTheme', t);
 
   return (
     <ThemeContext.Provider value={{ theme, colorTheme, toggleTheme, setColorTheme }}>

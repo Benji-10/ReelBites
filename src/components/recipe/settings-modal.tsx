@@ -14,53 +14,27 @@ interface SettingsModalProps {
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const {
     smallLiquid, largeLiquid, weight, dry, temperature,
-    defaultServings, setSetting, setAllMetric, setAllImperial, loadSettings,
+    defaultServings, setSetting, setAllMetric, setAllImperial, loadFromStorage,
   } = useSettings();
 
   useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
+    loadFromStorage();
+  }, [loadFromStorage]);
 
   if (!open) return null;
 
   const categories = [
-    {
-      key: 'smallLiquid' as const,
-      label: 'Small Liquids',
-      examples: 'tsp, tbsp → ml',
-      value: smallLiquid,
-    },
-    {
-      key: 'largeLiquid' as const,
-      label: 'Large Liquids',
-      examples: 'cups, pints → liters',
-      value: largeLiquid,
-    },
-    {
-      key: 'weight' as const,
-      label: 'Weights',
-      examples: 'oz, lbs → g, kg',
-      value: weight,
-    },
-    {
-      key: 'dry' as const,
-      label: 'Dry Ingredients',
-      examples: 'cups → g (flour, sugar)',
-      value: dry,
-    },
-    {
-      key: 'temperature' as const,
-      label: 'Temperature',
-      examples: '°F → °C',
-      value: temperature,
-    },
+    { key: 'smallLiquid' as const, label: 'Small Liquids', examples: 'tsp, tbsp → ml', value: smallLiquid },
+    { key: 'largeLiquid' as const, label: 'Large Liquids', examples: 'cups, pints → liters', value: largeLiquid },
+    { key: 'weight' as const, label: 'Weights', examples: 'oz, lbs → g, kg', value: weight },
+    { key: 'dry' as const, label: 'Dry Ingredients', examples: 'cups → g (flour, sugar)', value: dry },
+    { key: 'temperature' as const, label: 'Temperature', examples: '°F → °C', value: temperature },
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
       <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
         <CardContent className="pt-6 space-y-5">
-          {/* Header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Settings className="h-5 w-5 text-primary" />
@@ -71,7 +45,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </Button>
           </div>
 
-          {/* Quick set all */}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={setAllMetric} className="flex-1 text-xs">
               All Metric
@@ -81,11 +54,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </Button>
           </div>
 
-          {/* Per-category unit settings */}
           <div className="space-y-3">
             <label className="text-sm font-medium">Unit Preferences</label>
             <p className="text-xs text-muted-foreground">
-              Choose metric or imperial for each measurement type.
+              Choose metric or imperial for each measurement type. Syncs across your devices.
             </p>
 
             {categories.map((cat) => (
@@ -118,37 +90,21 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             ))}
           </div>
 
-          {/* Default Servings */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Default Servings</label>
-            <p className="text-xs text-muted-foreground">
-              New recipes will default to this serving size.
-            </p>
+            <p className="text-xs text-muted-foreground">New recipes will default to this serving size.</p>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setSetting('defaultServings', Math.max(1, defaultServings - 1))}
-              >
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setSetting('defaultServings', Math.max(1, defaultServings - 1))}>
                 −
               </Button>
               <span className="font-semibold tabular-nums w-12 text-center">{defaultServings}</span>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setSetting('defaultServings', Math.min(20, defaultServings + 1))}
-              >
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setSetting('defaultServings', Math.min(20, defaultServings + 1))}>
                 +
               </Button>
             </div>
           </div>
 
-          {/* Done button */}
-          <Button onClick={onClose} className="w-full">
-            Done
-          </Button>
+          <Button onClick={onClose} className="w-full">Done</Button>
         </CardContent>
       </Card>
     </div>

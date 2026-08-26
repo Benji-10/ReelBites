@@ -17,6 +17,7 @@ model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  settings  Json?    // User preferences (theme, units, etc.) — synced across devices
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

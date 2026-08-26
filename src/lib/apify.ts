@@ -360,62 +360,45 @@ export async function scrapeInstagramPost(
   const videoUrl = extractVideoUrl(result);
   const thumbnailUrl = extractThumbnailUrl(result);
   const caption = result.caption || null;
-  const comments = extractComments(result);
+  const postAuthor = result.ownerUsername || result.owner?.username || null;
 
-  // Sort comments: author comments first (they often contain the recipe),
-  // then pinned, then by likes descending.
-  comments.sort((a, b) => {
-    if (a.isAuthor && !b.isAuthor) return -1;
-    if (!a.isAuthor && b.isAuthor) return 1;
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return b.likes - a.likes;
-  });
-  let topComments = comments.slice(0, 10);
+  // ALWAYS use the dedicated comment scraper instead of the reel-scraper's
+  // `latestComments`. The reel-scraper only returns the 10 most RECENT
+  // comments, which often misses the author's pinned recipe comment.
+  // The comment scraper fetches all comments sorted by likes and is more
+  // reliable for finding author comments.
+  let topComments: InstagramComment[] = [];
+  try {
+    onProgress?.('Fetching comments via dedicated comment scraper...');
+    const fetchedComments = await fetchComments(instagramUrl, token!, postAuthor);
 
-  // If no author comments were found, try fetching them separately
-  // using the dedicated comment scraper actor. This is more reliable
-  // because the reel-scraper only returns the 10 most RECENT comments,
-  // which may not include the author's pinned recipe comment.
-  const hasAuthorComment = topComments.some((c) => c.isAuthor);
-  if (!hasAuthorComment) {
-    onProgress?.('No author comments found in initial scrape. Fetching comments separately...');
+    // Sort: author comments first, then pinned, then by likes descending.
+    fetchedComments.sort((a, b) => {
+      if (a.isAuthor && !b.isAuthor) return -1;
+      if (!a.isAuthor && b.isAuthor) return 1;
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return b.likes - a.likes;
+    });
+    topComments = fetchedComments.slice(0, 10);
 
-    const postAuthor = result.ownerUsername || result.owner?.username || null;
-    try {
-      const fetchedComments = await fetchComments(instagramUrl, token!, postAuthor);
-      if (fetchedComments.length > 0) {
-        // Merge with existing comments (deduplicate by text).
-        const existingTexts = new Set(topComments.map((c) => c.text));
-        const newComments = fetchedComments.filter((c) => !existingTexts.has(c.text));
-
-        // Sort the fetched comments the same way.
-        newComments.sort((a, b) => {
-          if (a.isAuthor && !b.isAuthor) return -1;
-          if (!a.isAuthor && b.isAuthor) return 1;
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return b.likes - a.likes;
-        });
-
-        // Merge: author comments first, then the rest.
-        const allComments = [...topComments, ...newComments];
-        allComments.sort((a, b) => {
-          if (a.isAuthor && !b.isAuthor) return -1;
-          if (!a.isAuthor && b.isAuthor) return 1;
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return b.likes - a.likes;
-        });
-        topComments = allComments.slice(0, 10);
-
-        console.log('[Apify] Fetched comments separately. Author comments found:',
-          topComments.filter((c) => c.isAuthor).length);
-      }
-    } catch (err) {
-      console.warn('[Apify] Comment fetch failed:', (err as Error).message);
-      // Continue with the comments we have.
-    }
+    console.log('[Apify] Comments from dedicated scraper:', {
+      total: fetchedComments.length,
+      authorComments: fetchedComments.filter((c) => c.isAuthor).length,
+      topCommentsCount: topComments.length,
+    });
+  } catch (err) {
+    console.warn('[Apify] Comment scraper failed, falling back to latestComments:', (err as Error).message);
+    // Fall back to the reel-scraper's comments if the dedicated scraper fails.
+    const fallbackComments = extractComments(result);
+    fallbackComments.sort((a, b) => {
+      if (a.isAuthor && !b.isAuthor) return -1;
+      if (!a.isAuthor && b.isAuthor) return 1;
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return b.likes - a.likes;
+    });
+    topComments = fallbackComments.slice(0, 10);
   }
 
   // If we still don't have a video URL, throw a detailed error.
