@@ -91,13 +91,15 @@ export function PantryView() {
   }
 
   // Barcode scanning using ZXing — works on ALL browsers including iOS Safari.
-  // Restricted to product barcode formats only (EAN/UPC) for speed and accuracy.
+  // Uses decodeFromConstraints for proper camera resolution + format hints.
   async function startBarcodeScan() {
     setScanning(true);
 
+    // Give the video element a moment to render.
+    await new Promise((r) => setTimeout(r, 200));
+
     try {
-      // Restrict to product barcode formats — this makes scanning much faster
-      // and avoids the "No Micro QR finder pattern" errors from trying QR/DataMatrix.
+      // Restrict to product barcode formats only.
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.EAN_13,
@@ -105,19 +107,24 @@ export function PantryView() {
         BarcodeFormat.UPC_A,
         BarcodeFormat.UPC_E,
         BarcodeFormat.CODE_128,
-        BarcodeFormat.CODE_39,
       ]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
 
       const reader = new BrowserMultiFormatReader(hints);
 
-      // Give the video element a moment to render.
-      await new Promise((r) => setTimeout(r, 100));
+      // High-resolution rear camera constraints — critical for barcode scanning.
+      const constraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      };
 
-      // Use the rear camera. On iOS, we need to specify facingMode.
-      const controls = await reader.decodeFromVideoDevice(
-        { facingMode: 'environment' },
+      const controls = await reader.decodeFromConstraints(
+        constraints,
         videoRef.current!,
-        (result, error) => {
+        (result, _error) => {
           if (result) {
             const code = result.getText();
             setBarcodeValue(code);
@@ -125,14 +132,13 @@ export function PantryView() {
             setShowAdd(true);
             toast.success(`Barcode scanned: ${code}`);
           }
-          // Errors ( NotFoundException etc.) are normal — they just mean
-          // the current frame didn't contain a valid barcode. Ignore them.
         },
       );
 
       scannerRef.current = controls;
-    } catch {
-      toast.error('Could not access camera. Check browser permissions.');
+    } catch (err) {
+      console.error('[barcode] Camera error:', err);
+      toast.error('Could not access camera. Try opening this page in Safari first to grant camera permission, then reopen the app.');
       setScanning(false);
     }
   }
