@@ -60,6 +60,33 @@ Return ONLY: {"category": "...", "genericName": "..."}`,
   }
 }
 
+/**
+ * Learn category overrides: if the user has previously set a custom category
+ * for a product with the same genericName, use that category instead of
+ * re-categorizing with AI.
+ */
+async function learnCategoryOverride(userId: string, genericName: string): Promise<string | null> {
+  try {
+    // Find existing pantry items with the same genericName.
+    const existing = await db.pantryItem.findFirst({
+      where: {
+        userId,
+        genericName: { equals: genericName, mode: 'insensitive' },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    // If the user previously set a category for this genericName, use it.
+    // We check if the category differs from what AI would assign by seeing
+    // if there's an existing item with a non-null category.
+    if (existing?.category) {
+      console.log(`[pantry] Category override learned: ${genericName} → ${existing.category}`);
+      return existing.category;
+    }
+  } catch {}
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
@@ -96,10 +123,19 @@ export async function POST(request: NextRequest) {
   let category = body.category;
   let genericName = body.genericName;
 
-  if (!category || !genericName) {
+  if (!genericName) {
     const ai = await categorizeWithAI(body.name);
     if (!category) category = ai.category;
     if (!genericName) genericName = ai.genericName;
+  }
+
+  // Learn category overrides: check if the user has previously set a custom
+  // category for this genericName. If so, use that instead.
+  if (!body.category && genericName) {
+    const learnedCategory = await learnCategoryOverride(user.id, genericName);
+    if (learnedCategory) {
+      category = learnedCategory;
+    }
   }
 
   try {

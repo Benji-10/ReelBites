@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, X, ShoppingCart, Loader2, ScanLine, ShoppingBasket, Check, ChevronDown, ChevronRight, Package, GripVertical } from 'lucide-react';
+import { Plus, Trash2, X, ShoppingCart, Loader2, ScanLine, ShoppingBasket, Check, ChevronDown, ChevronRight, Package, GripVertical, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -45,12 +45,21 @@ interface ShoppingList {
   items: ShoppingItem[];
 }
 
-// Basket item — items scanned/tapped while shopping, not yet in pantry.
+// Basket item — items scanned/tapped while shopping, with editable fields.
 interface BasketItem {
   name: string;
   barcode?: string;
   quantity?: string;
   genericName?: string;
+  category?: string;
+  expiryDate?: string;
+}
+
+interface RecurringItem {
+  id: string;
+  name: string;
+  genericName: string | null;
+  quantity: string | null;
 }
 
 function guessSection(name: string): { section: string; order: number } {
@@ -82,6 +91,8 @@ export function ShoppingListView() {
   const [scanning, setScanning] = useState(false);
   const [basket, setBasket] = useState<BasketItem[]>([]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [recurringItems, setRecurringItems] = useState<RecurringItem[]>([]);
+  const [editingBasketItem, setEditingBasketItem] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
 
@@ -89,11 +100,16 @@ export function ShoppingListView() {
 
   const fetchLists = useCallback(async () => {
     try {
-      const res = await fetch('/api/shopping-lists', { headers: authHeaders });
-      const data = await res.json();
-      setLists(data.lists || []);
-      if (data.lists?.length > 0 && !activeListId) {
-        setActiveListId(data.lists[0].id);
+      const [listsRes, recurringRes] = await Promise.all([
+        fetch('/api/shopping-lists', { headers: authHeaders }),
+        fetch('/api/recurring', { headers: authHeaders }),
+      ]);
+      const listsData = await listsRes.json();
+      const recurringData = await recurringRes.json();
+      setLists(listsData.lists || []);
+      setRecurringItems(recurringData.items || []);
+      if (listsData.lists?.length > 0 && !activeListId) {
+        setActiveListId(listsData.lists[0].id);
       }
     } catch {
       toast.error('Failed to load shopping lists.');
@@ -118,16 +134,78 @@ export function ShoppingListView() {
         body: JSON.stringify({ name: newListName.trim() }),
       });
       const data = await res.json();
-      setLists([data.list, ...lists]);
-      setActiveListId(data.list.id);
+      const newList = data.list;
+
+      // Auto-add recurring items to the new list.
+      if (recurringItems.length > 0 && newList.id) {
+        const itemsToAdd = recurringItems.map((ri) => ({
+          name: ri.name,
+          genericName: ri.genericName || ri.name.toLowerCase(),
+          quantity: ri.quantity || undefined,
+        }));
+
+        await fetch(`/api/shopping-lists/${newList.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify(itemsToAdd),
+        });
+
+        // Re-fetch to get the items.
+        const refetch = await fetch('/api/shopping-lists', { headers: authHeaders });
+        const refetchData = await refetch.json();
+        setLists(refetchData.lists || []);
+        toast.success(`List created with ${recurringItems.length} recurring items.`);
+      } else {
+        setLists([newList, ...lists]);
+        toast.success('List created.');
+      }
+
+      setActiveListId(newList.id);
       setNewListName('');
       setShowNewList(false);
-      toast.success('List created.');
     } catch {
       toast.error('Could not create list.');
     } finally {
       setAdding(false);
     }
+  }
+
+  async function toggleRecurring(item: ShoppingItem) {
+    // Check if this item is already recurring.
+    const existing = recurringItems.find((ri) =>
+      ri.name.toLowerCase() === item.name.toLowerCase() ||
+      ri.genericName?.toLowerCase() === (item.genericName || item.name).toLowerCase()
+    );
+
+    if (existing) {
+      // Remove from recurring.
+      await fetch(`/api/recurring`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ id: existing.id }),
+      });
+      setRecurringItems(recurringItems.filter((ri) => ri.id !== existing.id));
+      toast.success(`${item.name} removed from recurring items.`);
+    } else {
+      // Add to recurring.
+      const res = await fetch('/api/recurring', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ name: item.name, genericName: item.genericName, quantity: item.quantity }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecurringItems([...recurringItems, data.item]);
+        toast.success(`${item.name} added to recurring items.`);
+      }
+    }
+  }
+
+  function isRecurring(item: ShoppingItem): boolean {
+    return recurringItems.some((ri) =>
+      ri.name.toLowerCase() === item.name.toLowerCase() ||
+      ri.genericName?.toLowerCase() === (item.genericName || item.name).toLowerCase()
+    );
   }
 
   async function addItem(e: React.FormEvent) {
@@ -267,30 +345,35 @@ export function ShoppingListView() {
     }
   }
 
-  // Confirm basket → move all items to pantry.
+  // Confirm basket → move all items to pantry + remove from shopping list.
   async function confirmBasket() {
     if (basket.length === 0) return;
     setAdding(true);
     toast.info(`Adding ${basket.length} items to pantry...`);
 
     try {
-      for (const item of basket) {
-        // Enrich with AI for category + expiry.
-        let category = '';
-        let expiryDate = '';
+      // Track which shopping list items to remove.
+      const itemsToRemove: ShoppingItem[] = [];
 
-        try {
-          const enrichRes = await fetch('/api/pantry/enrich', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ barcode: item.barcode, name: item.name, quantity: item.quantity, category: '' }),
-          });
-          if (enrichRes.ok) {
-            const enrichData = await enrichRes.json();
-            category = enrichData.category || '';
-            expiryDate = enrichData.expiryDate || '';
-          }
-        } catch {}
+      for (const item of basket) {
+        // Use basket item's custom fields if set, otherwise enrich with AI.
+        let category = item.category || '';
+        let expiryDate = item.expiryDate || '';
+
+        if (!category || !expiryDate) {
+          try {
+            const enrichRes = await fetch('/api/pantry/enrich', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ barcode: item.barcode, name: item.name, quantity: item.quantity, category: item.category || '' }),
+            });
+            if (enrichRes.ok) {
+              const enrichData = await enrichRes.json();
+              if (!category) category = enrichData.category || '';
+              if (!expiryDate) expiryDate = enrichData.expiryDate || '';
+            }
+          } catch {}
+        }
 
         await fetch('/api/pantry', {
           method: 'POST',
@@ -303,9 +386,36 @@ export function ShoppingListView() {
             expiryDate: expiryDate || undefined,
           }),
         });
+
+        // Find matching shopping list items to remove.
+        if (activeList) {
+          const matched = activeList.items.filter((si) => {
+            const siName = (si.genericName || si.name).toLowerCase();
+            const basketName = (item.genericName || item.name).toLowerCase();
+            return siName === basketName || siName.includes(basketName) || basketName.includes(siName);
+          });
+          itemsToRemove.push(...matched);
+        }
       }
 
-      toast.success(`${basket.length} items added to pantry!`);
+      // Remove matched items from the shopping list.
+      for (const item of itemsToRemove) {
+        await fetch(`/api/shopping-items/${item.id}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        });
+      }
+
+      // Update local state — remove deleted items.
+      if (itemsToRemove.length > 0 && activeListId) {
+        setLists(lists.map((l) => {
+          if (l.id !== activeListId) return l;
+          const removedIds = new Set(itemsToRemove.map((i) => i.id));
+          return { ...l, items: l.items.filter((i) => !removedIds.has(i.id)) };
+        }));
+      }
+
+      toast.success(`${basket.length} items added to pantry!${itemsToRemove.length > 0 ? ` ${itemsToRemove.length} items removed from shopping list.` : ''}`);
       setBasket([]);
     } catch {
       toast.error('Could not add some items to pantry.');
@@ -491,6 +601,8 @@ export function ShoppingListView() {
                     onItemToggle={toggleItem}
                     onAddToBasket={addToBasket}
                     onDeleteItem={deleteItem}
+                    onToggleRecurring={toggleRecurring}
+                    isRecurring={isRecurring}
                   />
                 ))}
               </div>
@@ -510,7 +622,7 @@ export function ShoppingListView() {
         </Card>
       )}
 
-      {/* Shopping basket — floating at bottom */}
+      {/* Shopping basket — floating at bottom with editable items */}
       {basket.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-md shadow-lg">
           <div className="max-w-2xl mx-auto px-4 py-3 space-y-2">
@@ -527,14 +639,62 @@ export function ShoppingListView() {
                 </Button>
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto custom-scrollbar">
+            {/* Basket items — tap to edit quantity/category/expiry */}
+            <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar">
               {basket.map((item, i) => (
-                <Badge key={i} variant="secondary" className="text-xs gap-1">
-                  {item.name}
-                  <button onClick={() => setBasket(basket.filter((_, j) => j !== i))}>
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
+                <div key={i} className="flex flex-col gap-1.5 p-2 rounded-lg bg-muted/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => setEditingBasketItem(editingBasketItem === i ? null : i)}
+                      className="flex-1 text-left text-sm font-medium truncate"
+                    >
+                      {item.name}
+                      {(item.quantity || item.category || item.expiryDate) && (
+                        <span className="text-xs text-muted-foreground ml-2">
+                          {[item.quantity, item.category, item.expiryDate].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </button>
+                    <button onClick={() => setBasket(basket.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive p-1">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {/* Edit fields when tapped */}
+                  {editingBasketItem === i && (
+                    <div className="flex flex-col sm:flex-row gap-1.5">
+                      <Input
+                        placeholder="Qty (e.g. 500g)"
+                        value={item.quantity || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, quantity: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs flex-1 min-w-0"
+                      />
+                      <Input
+                        placeholder="Category"
+                        value={item.category || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, category: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs flex-1 min-w-0"
+                      />
+                      <Input
+                        type="date"
+                        value={item.expiryDate || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, expiryDate: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs w-full sm:w-auto shrink-0"
+                      />
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
@@ -553,6 +713,8 @@ interface SortableSectionProps {
   onItemToggle: (item: ShoppingItem) => void;
   onAddToBasket: (item: ShoppingItem) => void;
   onDeleteItem: (id: string) => void;
+  onToggleRecurring: (item: ShoppingItem) => void;
+  isRecurring: (item: ShoppingItem) => boolean;
 }
 
 function SortableSection({
@@ -563,6 +725,8 @@ function SortableSection({
   onItemToggle,
   onAddToBasket,
   onDeleteItem,
+  onToggleRecurring,
+  isRecurring,
 }: SortableSectionProps) {
   const {
     attributes,
@@ -588,7 +752,7 @@ function SortableSection({
         <button
           {...attributes}
           {...listeners}
-          className="cursor-grab active:cursor-grabbing p-1 text-muted-foreground hover:text-foreground touch-none"
+          className={`p-1 text-muted-foreground hover:text-foreground touch-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           aria-label="Drag to reorder section"
         >
           <GripVertical className="h-4 w-4" />
@@ -609,7 +773,16 @@ function SortableSection({
         <div className="space-y-1 ml-10">
           {items.map((item) => (
             <div key={item.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-border/60 hover:bg-muted/30 transition-colors">
-              <Checkbox checked={item.isChecked} onCheckedChange={() => onItemToggle(item)} />
+              <Checkbox
+                checked={item.isChecked}
+                onCheckedChange={(checked) => {
+                  if (checked) {
+                    onAddToBasket(item);
+                  } else {
+                    onItemToggle(item);
+                  }
+                }}
+              />
               <button
                 onClick={() => onAddToBasket(item)}
                 className={`flex-1 text-left text-sm ${item.isChecked ? 'line-through text-muted-foreground' : ''}`}
@@ -619,6 +792,14 @@ function SortableSection({
               </button>
               <button onClick={() => onDeleteItem(item.id)} className="text-muted-foreground hover:text-destructive p-1">
                 <Trash2 className="h-3.5 w-3.5" />
+              </button>
+              {/* Recurring toggle */}
+              <button
+                onClick={() => onToggleRecurring(item)}
+                className={`p-1 ${isRecurring(item) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                title={isRecurring(item) ? 'Recurring item — click to remove' : 'Make recurring'}
+              >
+                <RotateCw className="h-3.5 w-3.5" />
               </button>
             </div>
           ))}

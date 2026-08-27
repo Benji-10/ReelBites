@@ -24,6 +24,7 @@ model User {
   recipes        Recipe[]
   pantryItems    PantryItem[]
   shoppingLists  ShoppingList[]
+  recurringItems RecurringItem[]
 }
 
 model Recipe {
@@ -129,6 +130,24 @@ model ShoppingItem {
 
   @@index([shoppingListId])
   @@index([section])
+}
+
+// ---- Recurring Items ----
+// Items the user buys every shop. Auto-added to new shopping lists.
+model RecurringItem {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name          String
+  genericName   String?
+  quantity      String?
+  section       String?
+  sectionOrder  Int      @default(0)
+
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
 }
 
 model ExtractionJob {

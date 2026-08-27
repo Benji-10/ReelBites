@@ -21,9 +21,11 @@ interface NavbarProps {
   onSignup: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
+  pantryCount?: number;
+  shoppingCount?: number;
 }
 
-export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSettings }: NavbarProps) {
+export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSettings, pantryCount = 0, shoppingCount = 0 }: NavbarProps) {
   const { view, setView, recipes } = useStore();
   const { theme, toggleTheme, colorTheme, setColorTheme } = useTheme();
 
@@ -85,6 +87,11 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             >
               <Package className="h-4 w-4" />
               <span className="hidden sm:inline">Pantry</span>
+              {pantryCount > 0 && (
+                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
+                  {pantryCount}
+                </Badge>
+              )}
             </Button>
             <Button
               variant={view.name === 'shopping' ? 'default' : 'ghost'}
@@ -94,6 +101,11 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             >
               <ShoppingCart className="h-4 w-4" />
               <span className="hidden sm:inline">Shopping</span>
+              {shoppingCount > 0 && (
+                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
+                  {shoppingCount}
+                </Badge>
+              )}
             </Button>
           </nav>
 
