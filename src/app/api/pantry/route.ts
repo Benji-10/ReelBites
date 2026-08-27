@@ -22,6 +22,7 @@ interface PantryItemBody {
   expiryDate?: string;
   barcode?: string;
   isRunningLow?: boolean;
+  fillPercent?: number;
 }
 
 const FOOD_CATEGORIES = [
@@ -112,6 +113,7 @@ export async function POST(request: NextRequest) {
         expiryDate: body.expiryDate ? new Date(body.expiryDate) : null,
         barcode: body.barcode || null,
         isRunningLow: body.isRunningLow || false,
+        fillPercent: body.fillPercent ?? 100,
       },
     });
 

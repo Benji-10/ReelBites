@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, AlertTriangle, X, Package, ScanLine, Loader2, ChevronRight, Percent } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -14,6 +14,17 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { useStore } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
@@ -29,6 +40,7 @@ interface PantryItem {
   expiryDate: string | null;
   barcode: string | null;
   isRunningLow: boolean;
+  fillPercent?: number;
 }
 
 const CATEGORIES = [
@@ -36,6 +48,36 @@ const CATEGORIES = [
   'Sauces', 'Spices', 'Canned Goods', 'Frozen', 'Snacks', 'Beverages',
   'Condiments', 'Oils & Vinegars', 'Baking', 'Other',
 ];
+
+// Unit groups for quantity input.
+const LIQUID_UNITS = ['ml', 'L', 'fl oz', 'pints', 'gallons'];
+const WEIGHT_UNITS = ['g', 'kg', 'oz', 'lb'];
+const COUNT_UNITS = ['pcs', 'pack', 'box', 'bag', 'bottle', 'can', 'jar'];
+
+function detectUnitType(qty: string): 'liquid' | 'weight' | 'count' | null {
+  const lower = qty.toLowerCase();
+  if (LIQUID_UNITS.some((u) => lower.includes(u))) return 'liquid';
+  if (WEIGHT_UNITS.some((u) => lower.includes(u))) return 'weight';
+  if (COUNT_UNITS.some((u) => lower.includes(u))) return 'count';
+  // Heuristic: if it starts with a number followed by a letter.
+  const match = lower.match(/^(\d+(?:\.\d+)?)\s*([a-z]+)/);
+  if (match) {
+    const unit = match[2];
+    if (LIQUID_UNITS.some((u) => u.startsWith(unit) || unit.startsWith(u))) return 'liquid';
+    if (WEIGHT_UNITS.some((u) => u.startsWith(unit) || unit.startsWith(u))) return 'weight';
+  }
+  return null;
+}
+
+function extractNumber(qty: string): string {
+  const match = qty.match(/^(\d+(?:\.\d+)?)/);
+  return match ? match[1] : qty;
+}
+
+function extractUnit(qty: string): string {
+  const match = qty.match(/^\d+(?:\.\d+)?\s*([a-z\s]+)/i);
+  return match ? match[1].trim() : '';
+}
 
 export function PantryView() {
   const { authToken } = useStore();
@@ -51,7 +93,9 @@ export function PantryView() {
   const [barcodeValue, setBarcodeValue] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
   const [selectedItem, setSelectedItem] = useState<PantryItem | null>(null);
-  const [fillPercent, setFillPercent] = useState(100);
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
 
@@ -89,7 +133,6 @@ export function PantryView() {
           barcode: barcodeValue || undefined,
         }),
       });
-
       if (!res.ok) throw new Error('Failed to add.');
       const data = await res.json();
       setItems([...items, data.item]);
@@ -101,11 +144,9 @@ export function PantryView() {
     }
   }
 
-  // Barcode scanning using ZXing live camera.
   async function startBarcodeScan() {
     setScanning(true);
     await new Promise((r) => setTimeout(r, 200));
-
     try {
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
@@ -113,7 +154,6 @@ export function PantryView() {
       ]);
       hints.set(DecodeHintType.TRY_HARDER, true);
       const reader = new BrowserMultiFormatReader(hints);
-
       const controls = await reader.decodeFromConstraints(
         { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
         videoRef.current!,
@@ -145,7 +185,6 @@ export function PantryView() {
     return () => { if (scannerRef.current) scannerRef.current.stop(); };
   }, []);
 
-  // Look up product from Open Food Facts + Gemini enrichment.
   async function lookupProduct(barcode: string) {
     setLookingUp(true);
     setShowAdd(true);
@@ -154,7 +193,6 @@ export function PantryView() {
     try {
       const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
       if (!res.ok) throw new Error('Lookup failed.');
-
       const data = await res.json();
       let productName = '';
       let productQuantity = '';
@@ -169,13 +207,13 @@ export function PantryView() {
           const firstCat = categories[0].replace('en:', '').replace(/-/g, ' ');
           productCategory = firstCat.charAt(0).toUpperCase() + firstCat.slice(1);
         }
-
         if (productName) { setNewName(productName); toast.success(`Found: ${productName}`); }
         if (productQuantity) setNewQuantity(productQuantity);
         if (productCategory) setNewCategory(productCategory);
       }
 
-      // Gemini enrichment for missing fields.
+      // Gemini enrichment — always call, even if OFF had some data,
+      // to fill in missing fields (category, expiry, quantity).
       try {
         const enrichRes = await fetch('/api/pantry/enrich', {
           method: 'POST',
@@ -184,8 +222,9 @@ export function PantryView() {
         });
         if (enrichRes.ok) {
           const enrichData = await enrichRes.json();
+          // Only fill if not already set by OFF.
+          if (enrichData.category) setNewCategory(enrichData.category);
           if (enrichData.quantity && !productQuantity) setNewQuantity(enrichData.quantity);
-          if (enrichData.category && !productCategory) setNewCategory(enrichData.category);
           if (enrichData.expiryDate) setNewExpiry(enrichData.expiryDate);
         }
       } catch {}
@@ -198,6 +237,7 @@ export function PantryView() {
 
   async function updateItem(id: string, updates: Record<string, unknown>) {
     setItems(items.map((i) => (i.id === id ? { ...i, ...updates } as PantryItem : i)));
+    if (selectedItem) setSelectedItem({ ...selectedItem, ...updates } as PantryItem);
     await fetch(`/api/pantry/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
@@ -208,8 +248,40 @@ export function PantryView() {
   async function deleteItem(id: string) {
     setItems(items.filter((i) => i.id !== id));
     setSelectedItem(null);
+    setShowDeleteConfirm(false);
     await fetch(`/api/pantry/${id}`, { method: 'DELETE', headers: authHeaders });
     toast.success('Removed from pantry.');
+  }
+
+  function startEdit(field: string, currentValue: string) {
+    setEditingField(field);
+    setEditValue(currentValue);
+  }
+
+  async function saveEdit(field: string) {
+    if (!selectedItem) return;
+    const updates: Record<string, unknown> = { [field]: editValue };
+    if (field === 'expiryDate' && editValue) {
+      updates[field] = editValue;
+    }
+    await updateItem(selectedItem.id, updates);
+    setEditingField(null);
+  }
+
+  // Unit conversion for quantity input.
+  const currentQty = newQuantity || selectedItem?.quantity || '';
+  const qtyNumber = extractNumber(currentQty);
+  const qtyUnit = extractUnit(currentQty);
+  const unitType = detectUnitType(currentQty);
+  const availableUnits = unitType === 'liquid' ? LIQUID_UNITS : unitType === 'weight' ? WEIGHT_UNITS : unitType === 'count' ? COUNT_UNITS : [];
+
+  function changeUnit(newUnit: string, target: 'add' | 'edit') {
+    if (target === 'add') {
+      setNewQuantity(qtyNumber ? `${qtyNumber} ${newUnit}` : newQuantity);
+    } else if (selectedItem) {
+      const num = extractNumber(selectedItem.quantity || '');
+      setEditValue(num ? `${num} ${newUnit}` : editValue);
+    }
   }
 
   const categories = Array.from(new Set(items.map((i) => i.category || 'Other'))).sort();
@@ -242,7 +314,7 @@ export function PantryView() {
         </div>
       </div>
 
-      {/* Barcode scanner camera view */}
+      {/* Scanner */}
       {scanning && (
         <Card>
           <CardContent className="pt-4">
@@ -268,8 +340,25 @@ export function PantryView() {
               <Input placeholder="Product name..." value={newName} onChange={(e) => setNewName(e.target.value)} className="h-10" />
               <div className="flex gap-2">
                 <Input placeholder="Qty (e.g. 500g)" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} className="flex-1 min-w-0 h-10" />
-                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-[150px] shrink-0 h-10" />
+                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-[140px] shrink-0 h-10" />
               </div>
+              {/* Unit buttons */}
+              {availableUnits.length > 0 && qtyNumber && (
+                <div className="flex gap-1 flex-wrap">
+                  {availableUnits.map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => changeUnit(u, 'add')}
+                      className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
+                        qtyUnit === u ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {u}
+                    </button>
+                  ))}
+                </div>
+              )}
               <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
                 <option value="">Auto-categorize</option>
                 {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -278,7 +367,7 @@ export function PantryView() {
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">Barcode: {barcodeValue}</Badge>
                   {lookingUp && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                  <button onClick={() => setBarcodeValue('')} className="text-xs text-muted-foreground hover:text-foreground">
+                  <button type="button" onClick={() => setBarcodeValue('')} className="text-xs text-muted-foreground hover:text-foreground">
                     <X className="h-3 w-3" />
                   </button>
                 </div>
@@ -309,7 +398,7 @@ export function PantryView() {
         </div>
       )}
 
-      {/* Items list */}
+      {/* Items */}
       {filtered.length === 0 ? (
         <Card className="p-12 text-center">
           <Package className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
@@ -322,18 +411,23 @@ export function PantryView() {
             const daysToExpiry = expiry ? Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null;
             const isExpired = daysToExpiry !== null && daysToExpiry < 0;
             const isExpiringSoon = daysToExpiry !== null && daysToExpiry >= 0 && daysToExpiry <= 3;
+            const fill = item.fillPercent ?? 100;
 
             return (
               <button
                 key={item.id}
-                onClick={() => {
-                  setSelectedItem(item);
-                  setFillPercent(100); // Could load from DB if we store it.
-                }}
+                onClick={() => setSelectedItem(item)}
                 className="w-full flex items-center gap-3 p-3 rounded-lg border border-border/60 hover:bg-muted/30 transition-colors text-left"
               >
+                {/* Fill indicator bar */}
+                <div className="w-1.5 h-10 rounded-full shrink-0 overflow-hidden bg-muted">
+                  <div
+                    className={`w-full rounded-full ${fill > 50 ? 'bg-green-500' : fill > 20 ? 'bg-amber-500' : 'bg-red-500'}`}
+                    style={{ height: `${fill}%` }}
+                  />
+                </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">{item.name}</span>
                     {item.quantity && <span className="text-xs text-muted-foreground shrink-0">{item.quantity}</span>}
                   </div>
@@ -355,53 +449,146 @@ export function PantryView() {
       )}
 
       {/* Item detail sheet */}
-      <Sheet open={!!selectedItem} onOpenChange={(open) => !open && setSelectedItem(null)}>
+      <Sheet open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setEditingField(null); } }}>
         <SheetContent className="overflow-y-auto">
           {selectedItem && (
-            <>
-              <SheetHeader>
+            <div className="px-6 pb-6">
+              <SheetHeader className="px-0">
                 <SheetTitle>{selectedItem.name}</SheetTitle>
                 <SheetDescription>
                   {selectedItem.category} {selectedItem.quantity && `· ${selectedItem.quantity}`}
                 </SheetDescription>
               </SheetHeader>
 
-              <div className="space-y-4 mt-4">
-                {/* Fill level slider */}
-                <div className="space-y-2">
+              <div className="space-y-4 mt-6">
+                {/* Fill level slider — larger hitbox */}
+                <div className="space-y-3 p-3 -mx-3 rounded-lg hover:bg-muted/30">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium flex items-center gap-1.5">
                       <Percent className="h-3.5 w-3.5" />
                       Fill level
                     </label>
-                    <span className="text-sm text-muted-foreground tabular-nums">{fillPercent}%</span>
+                    <span className="text-sm text-muted-foreground tabular-nums">{selectedItem.fillPercent ?? 100}%</span>
                   </div>
-                  <Slider
-                    value={[fillPercent]}
-                    onValueChange={(v) => setFillPercent(v[0])}
-                    max={100}
-                    step={10}
-                    className="w-full"
-                  />
-                  {fillPercent <= 20 && (
+                  <div className="py-2">
+                    <Slider
+                      value={[selectedItem.fillPercent ?? 100]}
+                      onValueChange={(v) => updateItem(selectedItem.id, { fillPercent: v[0] })}
+                      max={100}
+                      step={10}
+                      className="w-full"
+                    />
+                  </div>
+                  {(selectedItem.fillPercent ?? 100) <= 20 && (
                     <p className="text-xs text-amber-500">Running low — consider adding to shopping list</p>
                   )}
                 </div>
 
-                {/* Expiry info */}
-                {selectedItem.expiryDate && (
-                  <div className="p-3 rounded-lg bg-muted/30">
-                    <p className="text-xs text-muted-foreground">Expiry date</p>
-                    <p className="text-sm font-medium">
-                      {new Date(selectedItem.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                    </p>
-                  </div>
-                )}
+                {/* Quantity — editable */}
+                <div className="p-3 -mx-3 rounded-lg hover:bg-muted/30">
+                  <p className="text-xs text-muted-foreground mb-1">Quantity</p>
+                  {editingField === 'quantity' ? (
+                    <div className="flex gap-2">
+                      <Input
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        className="h-8 text-sm flex-1"
+                        autoFocus
+                      />
+                      <Button size="icon" className="h-8 w-8" onClick={() => saveEdit('quantity')}>
+                        <Check className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEdit('quantity', selectedItem.quantity || '')}
+                      className="flex items-center gap-2 text-sm font-medium w-full text-left"
+                    >
+                      {selectedItem.quantity || 'Not set'}
+                      <Pencil className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  )}
+                  {/* Unit conversion buttons */}
+                  {editingField === 'quantity' && availableUnits.length > 0 && qtyNumber && (
+                    <div className="flex gap-1 flex-wrap mt-2">
+                      {availableUnits.map((u) => (
+                        <button
+                          key={u}
+                          onClick={() => {
+                            const num = extractNumber(editValue);
+                            setEditValue(num ? `${num} ${u}` : editValue);
+                          }}
+                          className={`px-2 py-0.5 rounded text-xs border ${extractUnit(editValue) === u ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground'}`}
+                        >
+                          {u}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Expiry — editable */}
+                <div className="p-3 -mx-3 rounded-lg hover:bg-muted/30">
+                  <p className="text-xs text-muted-foreground mb-1">Expiry date</p>
+                  {editingField === 'expiryDate' ? (
+                    <div className="flex gap-2">
+                      <Input
+                        type="date"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        className="h-8 text-sm flex-1"
+                        autoFocus
+                      />
+                      <Button size="icon" className="h-8 w-8" onClick={() => saveEdit('expiryDate')}>
+                        <Check className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEdit('expiryDate', selectedItem.expiryDate ? selectedItem.expiryDate.split('T')[0] : '')}
+                      className="flex items-center gap-2 text-sm font-medium w-full text-left"
+                    >
+                      {selectedItem.expiryDate
+                        ? new Date(selectedItem.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                        : 'Not set'}
+                      <Pencil className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Category — editable */}
+                <div className="p-3 -mx-3 rounded-lg hover:bg-muted/30">
+                  <p className="text-xs text-muted-foreground mb-1">Category</p>
+                  {editingField === 'category' ? (
+                    <div className="flex gap-2">
+                      <select
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        className="flex-1 h-8 rounded-md border border-input bg-background px-2 text-sm"
+                        autoFocus
+                      >
+                        <option value="">Select...</option>
+                        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <Button size="icon" className="h-8 w-8" onClick={() => saveEdit('category')}>
+                        <Check className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEdit('category', selectedItem.category || '')}
+                      className="flex items-center gap-2 text-sm font-medium w-full text-left"
+                    >
+                      {selectedItem.category || 'Not set'}
+                      <Pencil className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  )}
+                </div>
 
                 {/* Barcode */}
                 {selectedItem.barcode && (
-                  <div className="p-3 rounded-lg bg-muted/30">
-                    <p className="text-xs text-muted-foreground">Barcode</p>
+                  <div className="p-3 -mx-3 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-1">Barcode</p>
                     <p className="text-sm font-mono">{selectedItem.barcode}</p>
                   </div>
                 )}
@@ -411,27 +598,39 @@ export function PantryView() {
                   variant={selectedItem.isRunningLow ? 'default' : 'outline'}
                   size="sm"
                   className="w-full"
-                  onClick={() => {
-                    const updated = { isRunningLow: !selectedItem.isRunningLow };
-                    updateItem(selectedItem.id, updated);
-                    setSelectedItem({ ...selectedItem, ...updated });
-                  }}
+                  onClick={() => updateItem(selectedItem.id, { isRunningLow: !selectedItem.isRunningLow })}
                 >
-                  {selectedItem.isRunningLow ? 'Marked as running low' : 'Mark as running low'}
+                  {selectedItem.isRunningLow ? '✓ Marked as running low' : 'Mark as running low'}
                 </Button>
 
-                {/* Delete */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full text-destructive hover:text-destructive gap-1.5"
-                  onClick={() => deleteItem(selectedItem.id)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete item
-                </Button>
+                {/* Delete with confirmation */}
+                <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="ghost" size="sm" className="w-full text-destructive hover:text-destructive gap-1.5">
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete item
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this item?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will permanently remove &ldquo;{selectedItem.name}&rdquo; from your pantry.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => deleteItem(selectedItem.id)}
+                        className="bg-destructive text-white hover:bg-destructive/90"
+                      >
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
-            </>
+            </div>
           )}
         </SheetContent>
       </Sheet>

@@ -84,6 +84,7 @@ model PantryItem {
   expiryDate    DateTime?
   barcode       String?
   isRunningLow  Boolean  @default(false)
+  fillPercent   Int      @default(100)
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
