@@ -322,7 +322,16 @@ export function ShoppingListView() {
   }
 
   // Group items by section.
-  // Drag-and-drop sensors — require slightly more movement to avoid accidental drags.
+  const groupedItems = activeList?.items.reduce((acc, item) => {
+    const section = item.section || 'Other';
+    if (!acc[section]) acc[section] = [];
+    acc[section].push(item);
+    return acc;
+  }, {} as Record<string, ShoppingItem[]>) || {};
+
+  const sortedSections = Object.entries(groupedItems).sort(([, a], [, b]) => a[0]?.sectionOrder - b[0]?.sectionOrder || 0);
+
+  // Drag-and-drop sensors.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -332,24 +341,23 @@ export function ShoppingListView() {
 
   // Update section order when sections change.
   useEffect(() => {
-    if (sortedSections.length > 0) {
-      const currentSections = sortedSections.map(([s]) => s);
-      // Only update if sections changed (not on every render).
-      if (JSON.stringify(currentSections) !== JSON.stringify(sectionOrder)) {
-        setSectionOrder(currentSections);
-      }
+    const currentSections = sortedSections.map(([s]) => s);
+    if (currentSections.length > 0 && JSON.stringify(currentSections) !== JSON.stringify(sectionOrder)) {
+      setSectionOrder(currentSections);
     }
-  }, [activeList?.items]);
+  }, [sortedSections.length, activeList?.items.length]);
 
   // Re-sort sections based on user's custom order.
-  const customSortedSections = sortedSections.sort((a, b) => {
-    const aIdx = sectionOrder.indexOf(a[0]);
-    const bIdx = sectionOrder.indexOf(b[0]);
-    if (aIdx === -1 && bIdx === -1) return a[1][0]?.sectionOrder - b[1][0]?.sectionOrder || 0;
-    if (aIdx === -1) return 1;
-    if (bIdx === -1) return -1;
-    return aIdx - bIdx;
-  });
+  const customSortedSections = sectionOrder.length > 0
+    ? [...sortedSections].sort((a, b) => {
+        const aIdx = sectionOrder.indexOf(a[0]);
+        const bIdx = sectionOrder.indexOf(b[0]);
+        if (aIdx === -1 && bIdx === -1) return a[1][0]?.sectionOrder - b[1][0]?.sectionOrder || 0;
+        if (aIdx === -1) return 1;
+        if (bIdx === -1) return -1;
+        return aIdx - bIdx;
+      })
+    : sortedSections;
 
   function handleSectionDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -384,15 +392,6 @@ export function ShoppingListView() {
 
     toast.success('Section order saved.');
   }
-
-  const groupedItems = activeList?.items.reduce((acc, item) => {
-    const section = item.section || 'Other';
-    if (!acc[section]) acc[section] = [];
-    acc[section].push(item);
-    return acc;
-  }, {} as Record<string, ShoppingItem[]>) || {};
-
-  const sortedSections = Object.entries(groupedItems).sort(([, a], [, b]) => a[0]?.sectionOrder - b[0]?.sectionOrder || 0);
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
