@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
+import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 
 interface PantryItem {
   id: string;
@@ -90,19 +91,31 @@ export function PantryView() {
   }
 
   // Barcode scanning using ZXing — works on ALL browsers including iOS Safari.
+  // Restricted to product barcode formats only (EAN/UPC) for speed and accuracy.
   async function startBarcodeScan() {
     setScanning(true);
 
     try {
-      const reader = new BrowserMultiFormatReader();
+      // Restrict to product barcode formats — this makes scanning much faster
+      // and avoids the "No Micro QR finder pattern" errors from trying QR/DataMatrix.
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+      ]);
+
+      const reader = new BrowserMultiFormatReader(hints);
 
       // Give the video element a moment to render.
       await new Promise((r) => setTimeout(r, 100));
 
-      // ZXing's decodeFromVideoDevice uses the rear camera on mobile.
-      // Pass undefined for device ID to let the browser pick the best camera.
+      // Use the rear camera. On iOS, we need to specify facingMode.
       const controls = await reader.decodeFromVideoDevice(
-        undefined,
+        { facingMode: 'environment' },
         videoRef.current!,
         (result, error) => {
           if (result) {
@@ -112,6 +125,8 @@ export function PantryView() {
             setShowAdd(true);
             toast.success(`Barcode scanned: ${code}`);
           }
+          // Errors ( NotFoundException etc.) are normal — they just mean
+          // the current frame didn't contain a valid barcode. Ignore them.
         },
       );
 
