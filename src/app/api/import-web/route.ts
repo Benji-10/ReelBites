@@ -4,8 +4,7 @@
  * Scrapes a web page, extracts the main recipe content, and generates
  * a structured recipe using Gemini.
  *
- * Works with food blogs, recipe sites (AllRecipes, BBC Good Food, etc.),
- * and any web page that contains a recipe.
+ * Uses the html-extractor for robust JSON-LD + HTML text extraction.
  *
  * Request:  { "url": "https://www.allrecipes.com/recipe/..." }
  * Response: { "recipe": { ...structured recipe... } }
@@ -13,6 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { extractRecipeContent } from '@/lib/html-extractor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +31,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing "url" field.' }, { status: 400 });
   }
 
-  // Validate URL.
   try {
     new URL(url);
   } catch {
@@ -62,16 +61,16 @@ export async function POST(request: NextRequest) {
     const html = await response.text();
     console.log('[import-web] Page fetched:', html.length, 'chars');
 
-    // Step 2: Extract text content from HTML (strip tags, scripts, styles).
-    const textContent = extractTextFromHtml(html);
-    console.log('[import-web] Extracted text:', textContent.length, 'chars');
+    // Step 2: Extract recipe content (JSON-LD first, then cleaned HTML).
+    const { content, isStructured } = extractRecipeContent(html);
+    console.log('[import-web] Extracted content:', content.length, 'chars, structured:', isStructured);
 
-    if (textContent.length < 100) {
+    if (content.length < 100) {
       return NextResponse.json({ error: 'Page has very little text content. Is this a recipe page?' }, { status: 400 });
     }
 
-    // Limit to 15000 chars to stay within Gemini's context window.
-    const truncatedText = textContent.slice(0, 15000);
+    // Limit to 15000 chars.
+    const truncatedText = content.slice(0, 15000);
 
     // Step 3: Extract page title.
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -89,17 +88,19 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = `You are a professional recipe extractor. A user has shared a web page that contains a recipe. Extract the recipe from the page content below.
+    const sourceLabel = isStructured ? 'structured recipe data (JSON-LD)' : 'page text content';
+
+    const prompt = `You are a professional recipe extractor. A user has shared a web page that contains a recipe. Extract the recipe from the ${sourceLabel} below.
 
 Page title: ${pageTitle}
 Page URL: ${url}
 
 CRITICAL RULES:
-1. Use information from the page content. If an amount is specified, use it exactly.
+1. Use information from the content. If an amount is specified, use it exactly.
 2. If an ingredient is mentioned but its amount is NOT specified, estimate a realistic quantity. Set "flag" to "estimated_amount".
 3. If you need to add an ingredient not mentioned but clearly needed, set "flag" to "estimated_ingredient".
 4. For EACH instruction, include "ingredientRefs" — array of ingredient indices used in that step.
-5. Include an "evidence" string for every field: "web" (from the web page).
+5. Include an "evidence" string for every field: "web".
 6. ALWAYS include metadata: servings, prepTime, cookTime, totalTime, difficulty, cuisine, nutrition, costPerServing, equipment.
 7. Auto-generate 2-5 tags.
 8. Set "food_hint" to true.
@@ -119,7 +120,7 @@ OUTPUT FORMAT (JSON):
   "flags": []
 }
 
---- PAGE CONTENT ---
+--- ${sourceLabel.toUpperCase()} ---
 ${truncatedText}
 
 Return ONLY the JSON object.`;
@@ -139,7 +140,6 @@ Return ONLY the JSON object.`;
       }
     }
 
-    // Build the full recipe object.
     const recipe = {
       title: parsed.title || pageTitle || 'Imported Recipe',
       description: parsed.description || '',
@@ -154,7 +154,7 @@ Return ONLY the JSON object.`;
       sourceCaption: pageTitle,
       sourceComments: [],
       transcript: '',
-      ocrText: truncatedText.slice(0, 5000), // Store the extracted text as "OCR"
+      ocrText: truncatedText.slice(0, 5000),
       imageUrl: null,
       sourceVideoUrl: null,
     };
@@ -165,58 +165,4 @@ Return ONLY the JSON object.`;
     console.error('[import-web] Failed:', err);
     return NextResponse.json({ error: `Import failed: ${(err as Error).message}` }, { status: 500 });
   }
-}
-
-/**
- * Extract readable text content from HTML.
- * Strips scripts, styles, nav, footer, and extracts text from main content.
- */
-function extractTextFromHtml(html: string): string {
-  // Remove script and style tags.
-  let text = html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
-    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
-
-  // Try to find recipe-specific sections (Schema.org JSON-LD, recipe class).
-  const jsonLdMatch = text.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/i);
-  if (jsonLdMatch) {
-    try {
-      const jsonLd = JSON.parse(jsonLdMatch[1]);
-      if (jsonLd['@type'] === 'Recipe' || (Array.isArray(jsonLd['@graph']) && jsonLd['@graph'].some((n: { '@type'?: string }) => n['@type'] === 'Recipe'))) {
-        // Found structured recipe data — use it directly.
-        const recipe = Array.isArray(jsonLd['@graph'])
-          ? jsonLd['@graph'].find((n: { '@type'?: string }) => n['@type'] === 'Recipe')
-          : jsonLd;
-        return JSON.stringify(recipe, null, 2);
-      }
-    } catch {}
-  }
-
-  // Look for recipe container elements.
-  const recipeContainerMatch = text.match(/<div[^>]*class="[^"]*(?:recipe|ingredients|instructions)[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-  if (recipeContainerMatch) {
-    text = recipeContainerMatch[1];
-  }
-
-  // Convert HTML to text.
-  text = text
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<\/h[1-6]>/gi, '\n')
-    .replace(/<[^>]+>/g, '') // Remove all remaining tags.
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n') // Collapse multiple newlines.
-    .trim();
-
-  return text;
 }
