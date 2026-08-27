@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Loader2, Camera } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Camera, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -9,7 +9,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/browser';
-import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 
 interface PantryItem {
@@ -40,8 +39,7 @@ export function PantryView() {
   const [filter, setFilter] = useState<string>('all');
   const [scanning, setScanning] = useState(false);
   const [barcodeValue, setBarcodeValue] = useState('');
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const scannerRef = useRef<IScannerControls | null>(null);
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
   const authToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
 
   const fetchItems = useCallback(async () => {
@@ -90,16 +88,35 @@ export function PantryView() {
     }
   }
 
-  // Barcode scanning using ZXing — works on ALL browsers including iOS Safari.
-  // Uses decodeFromConstraints for proper camera resolution + format hints.
-  async function startBarcodeScan() {
-    setScanning(true);
+  // Barcode scanning using photo capture — works on ALL browsers including iOS PWA.
+  // Uses <input type="file" capture="environment"> which opens the native camera,
+  // then decodes the barcode from the captured photo using ZXing.
+  function startBarcodeScan() {
+    barcodeInputRef.current?.click();
+  }
 
-    // Give the video element a moment to render.
-    await new Promise((r) => setTimeout(r, 200));
+  async function handleBarcodePhoto(file: File) {
+    setScanning(true);
+    toast.info('Decoding barcode...');
 
     try {
-      // Restrict to product barcode formats only.
+      // Read the image as a data URL.
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // Create an image element.
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not load image.'));
+        img.src = dataUrl;
+      });
+
+      // Set up ZXing with product barcode formats only.
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.EAN_13,
@@ -107,57 +124,25 @@ export function PantryView() {
         BarcodeFormat.UPC_A,
         BarcodeFormat.UPC_E,
         BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
       ]);
       hints.set(DecodeHintType.TRY_HARDER, true);
 
-      const reader = new BrowserMultiFormatReader(hints);
+      const zxingReader = new BrowserMultiFormatReader(hints);
 
-      // High-resolution rear camera constraints — critical for barcode scanning.
-      const constraints = {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-      };
+      // Decode from the image element.
+      const result = await zxingReader.decodeFromImageElement(img);
+      const code = result.getText();
 
-      const controls = await reader.decodeFromConstraints(
-        constraints,
-        videoRef.current!,
-        (result, _error) => {
-          if (result) {
-            const code = result.getText();
-            setBarcodeValue(code);
-            stopScan();
-            setShowAdd(true);
-            toast.success(`Barcode scanned: ${code}`);
-          }
-        },
-      );
-
-      scannerRef.current = controls;
-    } catch (err) {
-      console.error('[barcode] Camera error:', err);
-      toast.error('Could not access camera. Try opening this page in Safari first to grant camera permission, then reopen the app.');
+      setBarcodeValue(code);
+      setShowAdd(true);
+      toast.success(`Barcode scanned: ${code}`);
+    } catch {
+      toast.error('Could not read barcode from photo. Try again with better lighting, or enter the barcode manually.');
+    } finally {
       setScanning(false);
     }
   }
-
-  function stopScan() {
-    setScanning(false);
-    if (scannerRef.current) {
-      scannerRef.current.stop();
-      scannerRef.current = null;
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (scannerRef.current) {
-        scannerRef.current.stop();
-      }
-    };
-  }, []);
 
   async function toggleRunningLow(item: PantryItem) {
     const updated = { ...item, isRunningLow: !item.isRunningLow };
@@ -207,8 +192,21 @@ export function PantryView() {
           <p className="text-sm text-muted-foreground mt-1">{items.length} items tracked</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => startBarcodeScan()} variant="outline" size="icon" className="h-9 w-9" aria-label="Scan barcode">
-            <ScanLine className="h-4 w-4" />
+          {/* Hidden file input for barcode photo capture */}
+          <input
+            ref={barcodeInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleBarcodePhoto(file);
+              e.target.value = ''; // Reset so same file can be selected again.
+            }}
+          />
+          <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
+            {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
           </Button>
           <Button onClick={() => setShowAdd(!showAdd)} className="gap-2">
             <Plus className="h-4 w-4" />
@@ -216,24 +214,6 @@ export function PantryView() {
           </Button>
         </div>
       </div>
-
-      {/* Barcode scanner camera view */}
-      {scanning && (
-        <Card>
-          <CardContent className="pt-4">
-            <div className="relative">
-              <video ref={videoRef} className="w-full rounded-lg" playsInline muted />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-3/4 h-1 border-2 border-primary rounded" />
-              </div>
-              <Button variant="destructive" size="sm" onClick={stopScan} className="absolute top-2 right-2 gap-1">
-                <X className="h-3.5 w-3.5" /> Cancel
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground text-center mt-2">Point camera at a barcode...</p>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Expiring soon alert */}
       {expiringSoon.length > 0 && (
