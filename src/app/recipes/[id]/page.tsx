@@ -1,16 +1,9 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { AppShell } from '@/components/recipe/app-shell';
-import { useSearchParams } from 'next/navigation';
 
 export default function RecipeDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  // We use a wrapper to unwrap the params promise.
-  return <RecipeDetailWrapper params={params} />;
-}
-
-import { useEffect, useState } from 'react';
-
-function RecipeDetailWrapper({ params }: { params: Promise<{ id: string }> }) {
   const [recipeId, setRecipeId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -25,5 +18,5 @@ function RecipeDetailWrapper({ params }: { params: Promise<{ id: string }> }) {
     );
   }
 
-  return <AppShell initialView={{ name: 'detail', recipeId }} />;
+  return <AppShell viewName="detail" recipeId={recipeId} />;
 }

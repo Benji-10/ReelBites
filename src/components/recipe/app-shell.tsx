@@ -13,13 +13,15 @@ import { PantryView } from './pantry-view';
 import { ShoppingListView } from './shopping-list-view';
 import { Footer } from './footer';
 import { SettingsModal } from './settings-modal';
-import type { AppView } from '@/lib/types';
+
+type ViewName = 'extract' | 'box' | 'detail' | 'pantry' | 'shopping';
 
 interface AppShellProps {
-  initialView?: AppView;
+  viewName?: ViewName;
+  recipeId?: string;
 }
 
-export function AppShell({ initialView }: AppShellProps) {
+export function AppShell({ viewName, recipeId }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, token, isReady, login, signup, logout } = useNetlifyIdentity();
@@ -29,26 +31,24 @@ export function AppShell({ initialView }: AppShellProps) {
   const [pantryCount, setPantryCount] = useState(0);
   const [shoppingCount, setShoppingCount] = useState(0);
 
-  // Determine the current view from the route.
-  const view: AppView = initialView || (() => {
-    if (pathname === '/pantry') return { name: 'pantry' };
-    if (pathname === '/shopping') return { name: 'shopping' };
-    if (pathname === '/recipes') return { name: 'box' };
-    if (pathname?.startsWith('/recipes/')) {
-      const id = pathname.split('/recipes/')[1];
-      return { name: 'detail', recipeId: id };
-    }
-    return { name: 'extract' };
+  // Determine the current view: use prop, then fall back to pathname.
+  const currentView: ViewName = viewName || (() => {
+    if (pathname === '/pantry') return 'pantry';
+    if (pathname === '/shopping') return 'shopping';
+    if (pathname === '/recipes') return 'box';
+    if (pathname?.startsWith('/recipes/')) return 'detail';
+    return 'extract';
   })();
 
-  // Navigation function — uses router.push.
-  const navigate = (v: AppView) => {
-    if (v.name === 'extract') router.push('/');
-    else if (v.name === 'box') router.push('/recipes');
-    else if (v.name === 'detail') router.push(`/recipes/${v.recipeId}`);
-    else if (v.name === 'pantry') router.push('/pantry');
-    else if (v.name === 'shopping') router.push('/shopping');
-  };
+  // Get recipeId from prop or URL.
+  const currentRecipeId = recipeId || (pathname?.startsWith('/recipes/') ? pathname.split('/recipes/')[1] : null);
+
+  function navigate(view: ViewName) {
+    if (view === 'extract') router.push('/');
+    else if (view === 'box') router.push('/recipes');
+    else if (view === 'pantry') router.push('/pantry');
+    else if (view === 'shopping') router.push('/shopping');
+  }
 
   useEffect(() => {
     loadFromStorage();
@@ -97,16 +97,16 @@ export function AppShell({ initialView }: AppShellProps) {
         onLogout={logout}
         onOpenSettings={() => setSettingsOpen(true)}
         onNavigate={navigate}
-        currentView={view.name}
+        currentView={currentView}
         pantryCount={pantryCount}
         shoppingCount={shoppingCount}
       />
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {view.name === 'extract' && <ExtractorView />}
-        {view.name === 'box' && <RecipeBox />}
-        {view.name === 'detail' && <RecipeDetail />}
-        {view.name === 'pantry' && <PantryView />}
-        {view.name === 'shopping' && <ShoppingListView />}
+        {currentView === 'extract' && <ExtractorView />}
+        {currentView === 'box' && <RecipeBox />}
+        {currentView === 'detail' && <RecipeDetail key={currentRecipeId} />}
+        {currentView === 'pantry' && <PantryView />}
+        {currentView === 'shopping' && <ShoppingListView />}
       </main>
       <Footer />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />

@@ -1,5 +1,5 @@
 'use client';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -53,10 +53,11 @@ function getMetadataIcon(key: string) {
 
 export function RecipeDetail() {
   const router = useRouter();
+  const pathname = usePathname();
   const { recipes, updateRecipe, removeRecipe, authToken } = useStore();
   // Get recipeId from the URL pathname.
-  const recipeId = typeof window !== 'undefined'
-    ? window.location.pathname.split('/recipes/')[1] || null
+  const recipeId = pathname?.startsWith('/recipes/')
+    ? pathname.split('/recipes/')[1] || null
     : null;
 
   const [recipe, setRecipe] = useState<SavedRecipe | null>(null);

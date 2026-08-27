@@ -15,19 +15,18 @@ function HomeWithSearch() {
     if (urlParam) {
       const match = urlParam.match(/https?:\/\/(?:www\.)?instagram\.com\/(?:reel|reels|p|tv)\/[A-Za-z0-9_-]+/);
       if (match) {
-        console.log('[home] Found Instagram URL in query param:', match[0]);
         startExtraction(match[0]);
         toast.success('Starting extraction from shared link!');
       }
     }
   }, [searchParams, startExtraction]);
 
-  return <AppShell initialView="extract" />;
+  return <AppShell viewName="extract" />;
 }
 
 export default function Home() {
   return (
-    <Suspense fallback={<AppShell initialView="extract" />}>
+    <Suspense fallback={<AppShell viewName="extract" />}>
       <HomeWithSearch />
     </Suspense>
   );

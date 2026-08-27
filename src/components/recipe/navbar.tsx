@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useStore } from '@/lib/store';
 import { useTheme } from '@/components/theme-provider';
-import type { AppView } from '@/lib/types';
 
 interface NavbarProps {
   user: { email: string; user_metadata?: { full_name?: string } } | null;
@@ -22,7 +21,7 @@ interface NavbarProps {
   onSignup: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
-  onNavigate: (view: AppView) => void;
+  onNavigate: (view: 'extract' | 'box' | 'detail' | 'pantry' | 'shopping') => void;
   currentView: string;
   pantryCount?: number;
   shoppingCount?: number;

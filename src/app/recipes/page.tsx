@@ -3,5 +3,5 @@
 import { AppShell } from '@/components/recipe/app-shell';
 
 export default function RecipesPage() {
-  return <AppShell initialView="box" />;
+  return <AppShell viewName="box" />;
 }
