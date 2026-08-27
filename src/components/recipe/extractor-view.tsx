@@ -76,10 +76,112 @@ export function ExtractorView() {
 
     if (isInstagramUrl(trimmedUrl)) {
       // Instagram — run the full client pipeline.
-      startExtraction(trimmedUrl);
+      await handleInstagramExtract(trimmedUrl);
     } else {
       // Web page — use the import-web API.
       await handleWebImport(trimmedUrl);
+    }
+  }
+
+  async function handleInstagramExtract(instagramUrl: string) {
+    startExtraction(instagramUrl);
+
+    try {
+      const { recipe, isRecipe } = await runClientPipeline(instagramUrl, ({ step, message, progress }) => {
+        updateExtraction({ step, message, progress, status: 'processing' });
+      });
+
+      // If Gemini determined this is not a recipe, don't save it.
+      if (!isRecipe) {
+        toast.info('This video doesn\'t appear to be a recipe — not saved.');
+        resetExtraction();
+        setUrl('');
+        return;
+      }
+
+      // Save to database.
+      const saveResponse = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+          isFavorite: false,
+          tags: recipe.tags || [],
+          collection: null,
+        }),
+      });
+
+      let savedRecipe: SavedRecipe;
+      if (saveResponse.ok) {
+        const saveData = await saveResponse.json();
+        savedRecipe = {
+          id: saveData.recipe.id,
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+          isFavorite: false,
+          tags: recipe.tags || [],
+          collection: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      } else {
+        const errData = await saveResponse.json().catch(() => ({}));
+        toast.error('Could not save recipe: ' + (errData.error || 'Database error'));
+        savedRecipe = {
+          id: 'temp-' + Date.now(),
+          title: recipe.title,
+          description: recipe.description,
+          ingredients: recipe.ingredients,
+          instructions: recipe.instructions,
+          metadata: recipe.metadata,
+          flags: recipe.flags,
+          sourceUrl: recipe.sourceUrl,
+          sourceCaption: recipe.sourceCaption,
+          sourceComments: recipe.sourceComments,
+          transcript: recipe.transcript,
+          ocrText: recipe.ocrText,
+          imageUrl: recipe.imageUrl,
+          sourceVideoUrl: recipe.sourceVideoUrl,
+          isFavorite: false,
+          tags: recipe.tags || [],
+          collection: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      addRecipe(savedRecipe);
+      toast.success('Recipe extracted successfully!');
+      setView({ name: 'detail', recipeId: savedRecipe.id });
+      resetExtraction();
+      setUrl('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error.';
+      updateExtraction({ status: 'failed', error: message });
+      toast.error('Extraction failed: ' + message);
     }
   }
 
