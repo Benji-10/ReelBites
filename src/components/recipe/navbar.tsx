@@ -14,6 +14,8 @@ import {
 import { useStore } from '@/lib/store';
 import { useTheme } from '@/components/theme-provider';
 
+type ViewName = 'extract' | 'box' | 'detail' | 'pantry' | 'shopping';
+
 interface NavbarProps {
   user: { email: string; user_metadata?: { full_name?: string } } | null;
   isReady: boolean;
@@ -21,7 +23,7 @@ interface NavbarProps {
   onSignup: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
-  onNavigate: (view: 'extract' | 'box' | 'detail' | 'pantry' | 'shopping') => void;
+  onNavigate: (view: ViewName) => void;
   currentView: string;
   pantryCount?: number;
   shoppingCount?: number;
@@ -45,7 +47,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
       <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between gap-2">
           <button
-            onClick={() => onNavigate({ name: 'extract' })}
+            onClick={() => onNavigate('extract')}
             className="flex items-center gap-2 font-bold text-lg shrink-0 hover:opacity-80 transition-opacity"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
@@ -58,7 +60,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             <Button
               variant={currentView === 'extract' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => onNavigate({ name: 'extract' })}
+              onClick={() => onNavigate('extract')}
               className="gap-1.5 px-2 sm:px-3"
             >
               <Sparkles className="h-4 w-4" />
@@ -67,34 +69,38 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             <Button
               variant={currentView === 'box' || currentView === 'detail' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => onNavigate({ name: 'box' })}
+              onClick={() => onNavigate('box')}
               className="gap-1.5 px-2 sm:px-3"
             >
               <BookOpen className="h-4 w-4" />
               <span className="hidden sm:inline">Recipes</span>
               {recipes.length > 0 && (
-                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{recipes.length}</Badge>
+                <Badge variant="secondary" className="hidden sm:flex ml-0.5 h-5 px-1.5 text-xs">{recipes.length}</Badge>
               )}
             </Button>
             <Button
               variant={currentView === 'pantry' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => onNavigate({ name: 'pantry' })}
+              onClick={() => onNavigate('pantry')}
               className="gap-1.5 px-2 sm:px-3"
             >
               <Package className="h-4 w-4" />
               <span className="hidden sm:inline">Pantry</span>
-              {pantryCount > 0 && <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{pantryCount}</Badge>}
+              {pantryCount > 0 && (
+                <Badge variant="secondary" className="hidden sm:flex ml-0.5 h-5 px-1.5 text-xs">{pantryCount}</Badge>
+              )}
             </Button>
             <Button
               variant={currentView === 'shopping' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => onNavigate({ name: 'shopping' })}
+              onClick={() => onNavigate('shopping')}
               className="gap-1.5 px-2 sm:px-3"
             >
               <ShoppingCart className="h-4 w-4" />
               <span className="hidden sm:inline">Shopping</span>
-              {shoppingCount > 0 && <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{shoppingCount}</Badge>}
+              {shoppingCount > 0 && (
+                <Badge variant="secondary" className="hidden sm:flex ml-0.5 h-5 px-1.5 text-xs">{shoppingCount}</Badge>
+              )}
             </Button>
           </nav>
 
