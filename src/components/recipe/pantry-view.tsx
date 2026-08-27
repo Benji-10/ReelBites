@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Loader2 } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Loader2, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import type { IScannerControls } from '@zxing/browser';
 
 interface PantryItem {
   id: string;
@@ -38,7 +40,7 @@ export function PantryView() {
   const [scanning, setScanning] = useState(false);
   const [barcodeValue, setBarcodeValue] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const scannerRef = useRef<IScannerControls | null>(null);
   const authToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
 
   const fetchItems = useCallback(async () => {
@@ -87,67 +89,51 @@ export function PantryView() {
     }
   }
 
-  // Barcode scanning using the Barcode Detection API (Chrome/Edge).
-  // Falls back to manual entry on unsupported browsers (Safari/Firefox).
+  // Barcode scanning using ZXing — works on ALL browsers including iOS Safari.
   async function startBarcodeScan() {
-    // Check if the Barcode Detection API is available.
-    if (!('BarcodeDetector' in window)) {
-      toast.info('Barcode scanning not supported on this browser. Enter the barcode manually.');
-      setShowAdd(true);
-      return;
-    }
-
     setScanning(true);
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-      streamRef.current = stream;
+      const reader = new BrowserMultiFormatReader();
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+      // Give the video element a moment to render.
+      await new Promise((r) => setTimeout(r, 100));
 
-        // @ts-expect-error - BarcodeDetector is not in standard TS types.
-        const detector = new window.BarcodeDetector({
-          formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'],
-        });
+      // ZXing's decodeFromVideoDevice uses the rear camera on mobile.
+      // Pass undefined for device ID to let the browser pick the best camera.
+      const controls = await reader.decodeFromVideoDevice(
+        undefined,
+        videoRef.current!,
+        (result, error) => {
+          if (result) {
+            const code = result.getText();
+            setBarcodeValue(code);
+            stopScan();
+            setShowAdd(true);
+            toast.success(`Barcode scanned: ${code}`);
+          }
+        },
+      );
 
-        const scan = async () => {
-          if (!scanning || !videoRef.current) return;
-          try {
-            const barcodes = await detector.detect(videoRef.current);
-            if (barcodes.length > 0) {
-              const code = barcodes[0].rawValue;
-              setBarcodeValue(code);
-              stopScan();
-              setShowAdd(true);
-              toast.success(`Barcode scanned: ${code}`);
-              return;
-            }
-          } catch {}
-          requestAnimationFrame(scan);
-        };
-        scan();
-      }
+      scannerRef.current = controls;
     } catch {
-      toast.error('Could not access camera.');
+      toast.error('Could not access camera. Check browser permissions.');
       setScanning(false);
     }
   }
 
   function stopScan() {
     setScanning(false);
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+    if (scannerRef.current) {
+      scannerRef.current.stop();
+      scannerRef.current = null;
     }
   }
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
+      if (scannerRef.current) {
+        scannerRef.current.stop();
       }
     };
   }, []);
