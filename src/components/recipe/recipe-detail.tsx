@@ -485,22 +485,7 @@ export function RecipeDetail() {
           )
         )}
 
-        {/* Metadata badges */}
-        {recipe.metadata && recipe.metadata.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {recipe.metadata.map((m, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-xs bg-muted rounded-full px-3 py-1">
-                {m.key.toLowerCase().includes('time') || m.key.toLowerCase().includes('prep') || m.key.toLowerCase().includes('cook') ? (
-                  <Clock className="h-3 w-3" />
-                ) : m.key.toLowerCase().includes('serving') ? (
-                  <Users className="h-3 w-3" />
-                ) : null}
-                <span className="font-medium capitalize">{m.key}:</span>
-                <span className="text-muted-foreground">{m.value}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Tags + Collection badges (metadata is shown in the grid below) */}
 
         {/* Source link */}
         {recipe.sourceUrl && (
@@ -511,7 +496,7 @@ export function RecipeDetail() {
             className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            View original reel
+            {recipe.sourceUrl && recipe.sourceUrl.includes('instagram.com') ? 'View original reel' : 'View website'}
           </a>
         )}
 

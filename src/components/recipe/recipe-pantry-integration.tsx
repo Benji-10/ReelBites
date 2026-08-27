@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { useStore } from '@/lib/store';
 import type { SavedRecipe, RecipeIngredient } from '@/lib/types';
 
 interface PantryItem {
@@ -38,7 +39,7 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
   const [loading, setLoading] = useState(true);
   const [selectedListId, setSelectedListId] = useState<string>('');
   const [adding, setAdding] = useState(false);
-  const authToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+  const { authToken } = useStore();
 
   useEffect(() => {
     async function loadData() {

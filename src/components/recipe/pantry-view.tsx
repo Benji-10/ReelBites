@@ -96,6 +96,8 @@ export function PantryView() {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
 
@@ -119,7 +121,8 @@ export function PantryView() {
 
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!newName.trim() || adding) return;
+    setAdding(true);
 
     try {
       const res = await fetch('/api/pantry', {
@@ -141,6 +144,8 @@ export function PantryView() {
       toast.success('Added to pantry.');
     } catch {
       toast.error('Could not add item.');
+    } finally {
+      setAdding(false);
     }
   }
 
@@ -337,7 +342,30 @@ export function PantryView() {
         <Card>
           <CardContent className="pt-4">
             <form onSubmit={addItem} className="space-y-3">
-              <Input placeholder="Product name..." value={newName} onChange={(e) => setNewName(e.target.value)} className="h-10" />
+              {/* Product name with suggestions */}
+              <div className="relative">
+                <Input
+                  placeholder="Product name..."
+                  value={newName}
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                  className="h-10"
+                />
+                {showSuggestions && (
+                  <CommonItemsDropdown
+                    query={newName}
+                    pantryItems={items}
+                    onSelect={(name) => {
+                      setNewName(name);
+                      setShowSuggestions(false);
+                    }}
+                  />
+                )}
+              </div>
               <div className="flex gap-2">
                 <Input placeholder="Qty (e.g. 500g)" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} className="flex-1 min-w-0 h-10" />
                 <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-[140px] shrink-0 h-10" />
@@ -373,8 +401,10 @@ export function PantryView() {
                 </div>
               )}
               <div className="flex gap-2">
-                <Button type="submit" size="sm">Add</Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
+                <Button type="submit" size="sm" disabled={adding}>
+                  {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Add'}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdd(false)} disabled={adding}>Cancel</Button>
               </div>
             </form>
           </CardContent>
@@ -634,6 +664,65 @@ export function PantryView() {
           )}
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+// Common staple items — shown as suggestions when the user starts typing.
+const COMMON_STAPLES = [
+  'Milk', 'Eggs', 'Bread', 'Butter', 'Cheese', 'Yogurt',
+  'Onions', 'Garlic', 'Tomatoes', 'Potatoes', 'Carrots', 'Lettuce',
+  'Bananas', 'Apples', 'Lemons', 'Avocados',
+  'Chicken Breast', 'Minced Beef', 'Bacon', 'Salmon',
+  'Pasta', 'Rice', 'Flour', 'Sugar', 'Olive Oil', 'Salt', 'Black Pepper',
+  'Soy Sauce', 'Tomato Paste', 'Canned Beans', 'Canned Tomatoes',
+  'Tuna', 'Stock Cubes', 'Baking Powder', 'Vanilla Extract',
+  'Coffee', 'Tea', 'Orange Juice', 'Sparkling Water',
+  'Chocolate', 'Honey', 'Peanut Butter', 'Jam',
+];
+
+interface CommonItemsDropdownProps {
+  query: string;
+  pantryItems: PantryItem[];
+  onSelect: (name: string) => void;
+}
+
+function CommonItemsDropdown({ query, pantryItems, onSelect }: CommonItemsDropdownProps) {
+  // Get unique names from pantry (user's previously added items).
+  const userItems = Array.from(new Set(pantryItems.map((i) => i.name))).slice(0, 20);
+
+  // Combine user items with common staples, deduplicate, and filter by query.
+  const allItems = Array.from(new Set([...userItems, ...COMMON_STAPLES]));
+  const filtered = query.trim()
+    ? allItems.filter((name) => name.toLowerCase().includes(query.toLowerCase()))
+    : allItems;
+
+  // Show top 8 suggestions.
+  const suggestions = filtered.slice(0, 8);
+
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-md max-h-60 overflow-y-auto custom-scrollbar">
+      {suggestions.map((name) => {
+        const isInPantry = pantryItems.some((i) => i.name === name);
+        return (
+          <button
+            key={name}
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onSelect(name);
+            }}
+            className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition-colors text-left"
+          >
+            <span>{name}</span>
+            {isInPantry && (
+              <Badge variant="secondary" className="text-xs h-4 px-1">In pantry</Badge>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
