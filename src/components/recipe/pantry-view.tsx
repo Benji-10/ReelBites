@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Camera, Loader2 } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Loader2, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/browser';
+import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 
 interface PantryItem {
@@ -39,7 +40,9 @@ export function PantryView() {
   const [filter, setFilter] = useState<string>('all');
   const [scanning, setScanning] = useState(false);
   const [barcodeValue, setBarcodeValue] = useState('');
-  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const scannerRef = useRef<IScannerControls | null>(null);
   const authToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
 
   const fetchItems = useCallback(async () => {
@@ -88,35 +91,13 @@ export function PantryView() {
     }
   }
 
-  // Barcode scanning using photo capture — works on ALL browsers including iOS PWA.
-  // Uses <input type="file" capture="environment"> which opens the native camera,
-  // then decodes the barcode from the captured photo using ZXing.
-  function startBarcodeScan() {
-    barcodeInputRef.current?.click();
-  }
-
-  async function handleBarcodePhoto(file: File) {
+  // Barcode scanning using ZXing live camera — works on iOS Safari with high-res camera.
+  async function startBarcodeScan() {
     setScanning(true);
-    toast.info('Decoding barcode...');
+
+    await new Promise((r) => setTimeout(r, 200));
 
     try {
-      // Read the image as a data URL.
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
-      // Create an image element.
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Could not load image.'));
-        img.src = dataUrl;
-      });
-
-      // Set up ZXing with product barcode formats only.
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.EAN_13,
@@ -124,23 +105,91 @@ export function PantryView() {
         BarcodeFormat.UPC_A,
         BarcodeFormat.UPC_E,
         BarcodeFormat.CODE_128,
-        BarcodeFormat.CODE_39,
       ]);
       hints.set(DecodeHintType.TRY_HARDER, true);
 
-      const zxingReader = new BrowserMultiFormatReader(hints);
+      const reader = new BrowserMultiFormatReader(hints);
 
-      // Decode from the image element.
-      const result = await zxingReader.decodeFromImageElement(img);
-      const code = result.getText();
+      const constraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      };
 
-      setBarcodeValue(code);
-      setShowAdd(true);
-      toast.success(`Barcode scanned: ${code}`);
-    } catch {
-      toast.error('Could not read barcode from photo. Try again with better lighting, or enter the barcode manually.');
-    } finally {
+      const controls = await reader.decodeFromConstraints(
+        constraints,
+        videoRef.current!,
+        (result, _error) => {
+          if (result) {
+            const code = result.getText();
+            setBarcodeValue(code);
+            stopScan();
+            // Auto-lookup the product name from the barcode.
+            lookupProduct(code);
+          }
+        },
+      );
+
+      scannerRef.current = controls;
+    } catch (err) {
+      console.error('[barcode] Camera error:', err);
+      toast.error('Could not access camera.');
       setScanning(false);
+    }
+  }
+
+  function stopScan() {
+    setScanning(false);
+    if (scannerRef.current) {
+      scannerRef.current.stop();
+      scannerRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        scannerRef.current.stop();
+      }
+    };
+  }, []);
+
+  // Look up product name from barcode using Open Food Facts API (free, no API key).
+  async function lookupProduct(barcode: string) {
+    setLookingUp(true);
+    setShowAdd(true);
+    toast.info(`Looking up product ${barcode}...`);
+
+    try {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
+      if (!res.ok) throw new Error('Lookup failed.');
+
+      const data = await res.json();
+      if (data.status === 1 && data.product) {
+        const name = data.product.product_name || data.product.generic_name || '';
+        if (name) {
+          setNewName(name);
+          toast.success(`Found: ${name}`);
+        } else {
+          toast.info('Product found but no name available. Enter manually.');
+        }
+
+        // Also try to get category.
+        const categories = data.product.categories_tags || [];
+        if (categories.length > 0) {
+          // categories_tags are like "en:beverages", "en:plant-based-foods"
+          const firstCat = categories[0].replace('en:', '').replace(/-/g, ' ');
+          setNewCategory(firstCat.charAt(0).toUpperCase() + firstCat.slice(1));
+        }
+      } else {
+        toast.info('Product not found in database. Enter details manually.');
+      }
+    } catch {
+      toast.info('Could not look up product. Enter details manually.');
+    } finally {
+      setLookingUp(false);
     }
   }
 
@@ -192,19 +241,6 @@ export function PantryView() {
           <p className="text-sm text-muted-foreground mt-1">{items.length} items tracked</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Hidden file input for barcode photo capture */}
-          <input
-            ref={barcodeInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleBarcodePhoto(file);
-              e.target.value = ''; // Reset so same file can be selected again.
-            }}
-          />
           <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
             {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
           </Button>
@@ -214,6 +250,24 @@ export function PantryView() {
           </Button>
         </div>
       </div>
+
+      {/* Barcode scanner camera view */}
+      {scanning && (
+        <Card>
+          <CardContent className="pt-4">
+            <div className="relative">
+              <video ref={videoRef} className="w-full rounded-lg" playsInline muted />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-3/4 h-1 border-2 border-primary rounded" />
+              </div>
+              <Button variant="destructive" size="sm" onClick={stopScan} className="absolute top-2 right-2 gap-1">
+                <X className="h-3.5 w-3.5" /> Cancel
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground text-center mt-2">Point camera at a barcode...</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Expiring soon alert */}
       {expiringSoon.length > 0 && (
@@ -245,6 +299,7 @@ export function PantryView() {
               {barcodeValue && (
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">Barcode: {barcodeValue}</Badge>
+                  {lookingUp && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
                   <button onClick={() => setBarcodeValue('')} className="text-xs text-muted-foreground hover:text-foreground">
                     <X className="h-3 w-3" />
                   </button>
