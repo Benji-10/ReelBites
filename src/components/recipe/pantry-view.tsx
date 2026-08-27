@@ -157,6 +157,7 @@ export function PantryView() {
   }, []);
 
   // Look up product name from barcode using Open Food Facts API (free, no API key).
+  // Then uses Gemini to estimate quantity, generic name, category, and expiry.
   async function lookupProduct(barcode: string) {
     setLookingUp(true);
     setShowAdd(true);
@@ -167,29 +168,80 @@ export function PantryView() {
       if (!res.ok) throw new Error('Lookup failed.');
 
       const data = await res.json();
+      let productName = '';
+      let productQuantity = '';
+      let productCategory = '';
+      let productImage = '';
+
       if (data.status === 1 && data.product) {
-        const name = data.product.product_name || data.product.generic_name || '';
-        if (name) {
-          setNewName(name);
-          toast.success(`Found: ${name}`);
-        } else {
-          toast.info('Product found but no name available. Enter manually.');
+        const p = data.product;
+        productName = p.product_name || p.generic_name || '';
+        productQuantity = p.quantity || '';
+        productImage = p.image_front_url || p.image_url || '';
+
+        // Get category from tags.
+        const categories = p.categories_tags || [];
+        if (categories.length > 0) {
+          const firstCat = categories[0].replace('en:', '').replace(/-/g, ' ');
+          productCategory = firstCat.charAt(0).toUpperCase() + firstCat.slice(1);
         }
 
-        // Also try to get category.
-        const categories = data.product.categories_tags || [];
-        if (categories.length > 0) {
-          // categories_tags are like "en:beverages", "en:plant-based-foods"
-          const firstCat = categories[0].replace('en:', '').replace(/-/g, ' ');
-          setNewCategory(firstCat.charAt(0).toUpperCase() + firstCat.slice(1));
+        if (productName) {
+          setNewName(productName);
+          toast.success(`Found: ${productName}`);
+        }
+
+        if (productQuantity) {
+          setNewQuantity(productQuantity);
+        }
+
+        if (productCategory) {
+          setNewCategory(productCategory);
         }
       } else {
-        toast.info('Product not found in database. Enter details manually.');
+        toast.info('Product not found in Open Food Facts. Using AI to categorize...');
       }
+
+      // Use Gemini to estimate generic name, category (if not set), quantity (if not set),
+      // and a suggested expiry date based on the product type.
+      await enrichWithAI(barcode, productName, productQuantity, productCategory);
     } catch {
       toast.info('Could not look up product. Enter details manually.');
     } finally {
       setLookingUp(false);
+    }
+  }
+
+  // Uses Gemini to estimate missing fields: generic name, category, quantity, expiry.
+  async function enrichWithAI(barcode: string, name: string, quantity: string, category: string) {
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+    // We can't use the server-side GEMINI_API_KEY from the client, so we call
+    // our own API endpoint to do the enrichment server-side.
+    try {
+      const res = await fetch('/api/pantry/enrich', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode, name, quantity, category }),
+      });
+
+      if (!res.ok) return;
+
+      const data = await res.json();
+      if (data.genericName) {
+        // genericName is set on the server when saving, but we can show it.
+        // We don't have a separate field for it in the UI — it's stored silently.
+      }
+      if (data.quantity && !quantity) {
+        setNewQuantity(data.quantity);
+      }
+      if (data.category && !category) {
+        setNewCategory(data.category);
+      }
+      if (data.expiryDate) {
+        setNewExpiry(data.expiryDate);
+      }
+    } catch {
+      // Silent fail — enrichment is optional.
     }
   }
 
@@ -290,11 +342,11 @@ export function PantryView() {
                 <Input placeholder="Qty (e.g. 500g)" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} className="w-full sm:w-32" />
               </div>
               <div className="flex flex-col sm:flex-row gap-2">
-                <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm">
+                <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1 min-w-0 h-9 rounded-md border border-input bg-background px-3 text-sm">
                   <option value="">Auto-categorize</option>
                   {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-full sm:w-auto" />
+                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-full sm:w-auto min-w-0" />
               </div>
               {barcodeValue && (
                 <div className="flex items-center gap-2">
