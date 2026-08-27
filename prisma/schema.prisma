@@ -21,7 +21,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  recipes Recipe[]
+  recipes        Recipe[]
+  pantryItems    PantryItem[]
+  shoppingLists  ShoppingList[]
 }
 
 model Recipe {
@@ -66,6 +68,66 @@ model Recipe {
   @@index([userId])
   @@index([isFavorite])
   @@index([collection])
+}
+
+// ---- Pantry ----
+
+model PantryItem {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name          String
+  genericName   String?  // Normalized name for lookups (e.g. "pasta", "milk")
+  category      String?  // e.g. "pasta", "vegetables", "grains", "sauces", "dairy"
+  quantity      String?  // e.g. "2", "500g", "1 box"
+  expiryDate    DateTime?
+  barcode       String?
+  isRunningLow  Boolean  @default(false)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([category])
+  @@index([genericName])
+}
+
+// ---- Shopping Lists ----
+
+model ShoppingList {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String   @default("Shopping List")
+  storeName   String?  // e.g. "Tesco", "Waitrose"
+
+  items       ShoppingItem[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ShoppingItem {
+  id            String   @id @default(cuid())
+  shoppingList  ShoppingList @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+  shoppingListId String
+
+  name          String
+  genericName   String?  // For matching with pantry
+  quantity      String?
+  section       String?  // e.g. "Produce", "Dairy", "Bakery", "Frozen"
+  sectionOrder  Int      @default(0) // Custom ordering of sections
+  isChecked     Boolean  @default(false)
+  recipeId      String?  // If this item was added from a recipe
+
+  createdAt     DateTime @default(now())
+
+  @@index([shoppingListId])
+  @@index([section])
 }
 
 model ExtractionJob {
