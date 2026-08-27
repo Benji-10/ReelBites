@@ -65,6 +65,11 @@ function loadFromLocalStorage(): UserSettings {
   return DEFAULT_SETTINGS;
 }
 
+// Initialize from localStorage synchronously — prevents theme flash on load.
+// On the server (SSR), this returns DEFAULT_SETTINGS (light).
+// On the client, this reads localStorage before first paint.
+const INITIAL_SETTINGS = loadFromLocalStorage();
+
 function saveToLocalStorage(settings: UserSettings): void {
   if (typeof window === 'undefined') return;
   try {
@@ -75,7 +80,7 @@ function saveToLocalStorage(settings: UserSettings): void {
 let syncTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export const useSettings = create<SettingsStore>((set, get) => ({
-  ...DEFAULT_SETTINGS,
+  ...INITIAL_SETTINGS,
 
   setSetting: (key, value) => {
     set((state) => {

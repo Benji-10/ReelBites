@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { useNetlifyIdentity } from '@/hooks/use-netlify-identity';
 import { useStore } from '@/lib/store';
 import { useSettings } from '@/lib/settings';
@@ -12,26 +13,51 @@ import { PantryView } from './pantry-view';
 import { ShoppingListView } from './shopping-list-view';
 import { Footer } from './footer';
 import { SettingsModal } from './settings-modal';
+import type { AppView } from '@/lib/types';
 
-export function AppShell() {
+interface AppShellProps {
+  initialView?: AppView;
+}
+
+export function AppShell({ initialView }: AppShellProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const { user, token, isReady, login, signup, logout } = useNetlifyIdentity();
-  const { view, setAuthToken, fetchRecipes } = useStore();
+  const { setAuthToken, fetchRecipes } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { loadFromStorage, syncFromServer, syncToServer } = useSettings();
   const [pantryCount, setPantryCount] = useState(0);
   const [shoppingCount, setShoppingCount] = useState(0);
 
-  // Load settings from localStorage on mount.
+  // Determine the current view from the route.
+  const view: AppView = initialView || (() => {
+    if (pathname === '/pantry') return { name: 'pantry' };
+    if (pathname === '/shopping') return { name: 'shopping' };
+    if (pathname === '/recipes') return { name: 'box' };
+    if (pathname?.startsWith('/recipes/')) {
+      const id = pathname.split('/recipes/')[1];
+      return { name: 'detail', recipeId: id };
+    }
+    return { name: 'extract' };
+  })();
+
+  // Navigation function — uses router.push.
+  const navigate = (v: AppView) => {
+    if (v.name === 'extract') router.push('/');
+    else if (v.name === 'box') router.push('/recipes');
+    else if (v.name === 'detail') router.push(`/recipes/${v.recipeId}`);
+    else if (v.name === 'pantry') router.push('/pantry');
+    else if (v.name === 'shopping') router.push('/shopping');
+  };
+
   useEffect(() => {
     loadFromStorage();
   }, [loadFromStorage]);
 
-  // Sync the auth token to the store whenever it changes.
   useEffect(() => {
     setAuthToken(token);
   }, [token, setAuthToken]);
 
-  // When the user logs in, sync settings from the server.
   useEffect(() => {
     if (user && token) {
       syncFromServer(token);
@@ -39,7 +65,6 @@ export function AppShell() {
     }
   }, [user, token, syncFromServer, fetchRecipes]);
 
-  // Fetch pantry + shopping counts for nav badges.
   useEffect(() => {
     if (token) {
       const headers = { Authorization: `Bearer ${token}` };
@@ -54,12 +79,9 @@ export function AppShell() {
     }
   }, [token]);
 
-  // Listen for settings changes and sync to server.
   useEffect(() => {
     const handleSettingsChange = () => {
-      if (token) {
-        syncToServer(token);
-      }
+      if (token) syncToServer(token);
     };
     window.addEventListener('settings-changed', handleSettingsChange);
     return () => window.removeEventListener('settings-changed', handleSettingsChange);
@@ -74,6 +96,8 @@ export function AppShell() {
         onSignup={signup}
         onLogout={logout}
         onOpenSettings={() => setSettingsOpen(true)}
+        onNavigate={navigate}
+        currentView={view.name}
         pantryCount={pantryCount}
         shoppingCount={shoppingCount}
       />

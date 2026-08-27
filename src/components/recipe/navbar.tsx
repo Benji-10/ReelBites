@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useStore } from '@/lib/store';
 import { useTheme } from '@/components/theme-provider';
+import type { AppView } from '@/lib/types';
 
 interface NavbarProps {
   user: { email: string; user_metadata?: { full_name?: string } } | null;
@@ -21,12 +22,14 @@ interface NavbarProps {
   onSignup: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
+  onNavigate: (view: AppView) => void;
+  currentView: string;
   pantryCount?: number;
   shoppingCount?: number;
 }
 
-export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSettings, pantryCount = 0, shoppingCount = 0 }: NavbarProps) {
-  const { view, setView, recipes } = useStore();
+export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSettings, onNavigate, currentView, pantryCount = 0, shoppingCount = 0 }: NavbarProps) {
+  const { recipes } = useStore();
   const { theme, toggleTheme, colorTheme, setColorTheme } = useTheme();
 
   const colorThemes = [
@@ -36,16 +39,14 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
     { key: 'berry', label: 'Berry', color: 'bg-pink-500' },
   ] as const;
 
-  // Only show settings/theme/palette for logged-in users (reduces mobile overflow).
   const showExtraControls = isReady && !!user;
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-md">
       <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between gap-2">
-          {/* Logo */}
           <button
-            onClick={() => setView({ name: 'extract' })}
+            onClick={() => onNavigate({ name: 'extract' })}
             className="flex items-center gap-2 font-bold text-lg shrink-0 hover:opacity-80 transition-opacity"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
@@ -54,69 +55,55 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             <span className="hidden sm:inline">RealBites</span>
           </button>
 
-          {/* Nav */}
           <nav className="flex items-center gap-1 shrink-0">
             <Button
-              variant={view.name === 'extract' ? 'default' : 'ghost'}
+              variant={currentView === 'extract' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setView({ name: 'extract' })}
+              onClick={() => onNavigate({ name: 'extract' })}
               className="gap-1.5 px-2 sm:px-3"
             >
               <Sparkles className="h-4 w-4" />
               <span className="hidden sm:inline">Import</span>
             </Button>
             <Button
-              variant={view.name === 'box' || view.name === 'detail' ? 'default' : 'ghost'}
+              variant={currentView === 'box' || currentView === 'detail' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setView({ name: 'box' })}
+              onClick={() => onNavigate({ name: 'box' })}
               className="gap-1.5 px-2 sm:px-3"
             >
               <BookOpen className="h-4 w-4" />
               <span className="hidden sm:inline">Recipes</span>
               {recipes.length > 0 && (
-                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
-                  {recipes.length}
-                </Badge>
+                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{recipes.length}</Badge>
               )}
             </Button>
             <Button
-              variant={view.name === 'pantry' ? 'default' : 'ghost'}
+              variant={currentView === 'pantry' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setView({ name: 'pantry' })}
+              onClick={() => onNavigate({ name: 'pantry' })}
               className="gap-1.5 px-2 sm:px-3"
             >
               <Package className="h-4 w-4" />
               <span className="hidden sm:inline">Pantry</span>
-              {pantryCount > 0 && (
-                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
-                  {pantryCount}
-                </Badge>
-              )}
+              {pantryCount > 0 && <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{pantryCount}</Badge>}
             </Button>
             <Button
-              variant={view.name === 'shopping' ? 'default' : 'ghost'}
+              variant={currentView === 'shopping' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setView({ name: 'shopping' })}
+              onClick={() => onNavigate({ name: 'shopping' })}
               className="gap-1.5 px-2 sm:px-3"
             >
               <ShoppingCart className="h-4 w-4" />
               <span className="hidden sm:inline">Shopping</span>
-              {shoppingCount > 0 && (
-                <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">
-                  {shoppingCount}
-                </Badge>
-              )}
+              {shoppingCount > 0 && <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 text-xs">{shoppingCount}</Badge>}
             </Button>
           </nav>
 
-          {/* Right side */}
           <div className="flex items-center gap-1 shrink-0">
-            {/* Theme toggle — always visible (small) */}
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-9 w-9">
               {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
 
-            {/* Settings + Color palette — only for logged-in users */}
             {showExtraControls && (
               <>
                 <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9 hidden sm:flex">
@@ -132,11 +119,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
                     <DropdownMenuLabel>Color Theme</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {colorThemes.map((t) => (
-                      <DropdownMenuItem
-                        key={t.key}
-                        onClick={() => setColorTheme(t.key)}
-                        className="gap-2 cursor-pointer"
-                      >
+                      <DropdownMenuItem key={t.key} onClick={() => setColorTheme(t.key)} className="gap-2 cursor-pointer">
                         <div className={`h-4 w-4 rounded-full ${t.color}`} />
                         {t.label}
                         {colorTheme === t.key && <span className="ml-auto text-xs">✓</span>}
@@ -147,15 +130,12 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
               </>
             )}
 
-            {/* Auth */}
             {isReady && user ? (
               <Button variant="ghost" size="icon" onClick={onLogout} className="h-9 w-9">
                 <LogOut className="h-4 w-4" />
               </Button>
             ) : isReady && !user ? (
-              <Button size="sm" onClick={onSignup} className="text-xs px-3">
-                Sign up
-              </Button>
+              <Button size="sm" onClick={onSignup} className="text-xs px-3">Sign up</Button>
             ) : null}
           </div>
         </div>

@@ -1,4 +1,5 @@
 'use client';
+import { useRouter } from 'next/navigation';
 
 import { Star, ListOrdered, AlertTriangle, ExternalLink, ChefHat, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -12,7 +13,7 @@ interface RecipeCardProps {
 }
 
 export function RecipeCard({ recipe }: RecipeCardProps) {
-  const { setView } = useStore();
+  const router = useRouter();
 
   const flagCount = recipe.flags?.length || 0;
   const ingredientCount = recipe.ingredients?.length || 0;
@@ -26,7 +27,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
   return (
     <Card
       className="group cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5 relative"
-      onClick={() => setView({ name: 'detail', recipeId: recipe.id })}
+      onClick={() => router.push(`/recipes/${recipe.id}`)}
     >
       {/* Favorite star */}
       {recipe.isFavorite && (
@@ -107,7 +108,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
           className="w-full group-hover:bg-primary group-hover:text-primary-foreground transition-colors"
           onClick={(e) => {
             e.stopPropagation();
-            setView({ name: 'detail', recipeId: recipe.id });
+            router.push(`/recipes/${recipe.id}`);
           }}
         >
           View Recipe

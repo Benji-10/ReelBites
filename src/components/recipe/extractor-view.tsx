@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Instagram, Globe, Camera, Loader2, Sparkles, Upload, Link2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +14,8 @@ import { runClientPipeline } from '@/lib/client-pipeline';
 import type { SavedRecipe, GeneratedRecipe } from '@/lib/types';
 
 export function ExtractorView() {
-  const { extraction, startExtraction, updateExtraction, resetExtraction, addRecipe, setView } =
+  const router = useRouter();
+  const { extraction, startExtraction, updateExtraction, resetExtraction, addRecipe } = 
     useStore();
   const [url, setUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -175,7 +177,7 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe extracted successfully!');
-      setView({ name: 'detail', recipeId: savedRecipe.id });
+      router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
       setUrl('');
     } catch (err) {
@@ -257,7 +259,7 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe imported successfully!');
-      setView({ name: 'detail', recipeId: savedRecipe.id });
+      router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
       setUrl('');
     } catch (err) {
@@ -350,7 +352,7 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe imported from photo!');
-      setView({ name: 'detail', recipeId: savedRecipe.id });
+      router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error.';

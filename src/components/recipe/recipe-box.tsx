@@ -1,4 +1,5 @@
 'use client';
+import { useRouter } from 'next/navigation';
 
 import { useEffect, useState, useMemo } from 'react';
 import { BookOpen, Plus, Star, Folder } from 'lucide-react';
@@ -10,7 +11,8 @@ import { RecipeCard } from './recipe-card';
 type FilterType = 'all' | 'favorites' | string; // string = collection name
 
 export function RecipeBox() {
-  const { recipes, fetchRecipes, setView, authToken } = useStore();
+  const router = useRouter();
+  const { recipes, fetchRecipes, authToken } = useStore();
   const [filter, setFilter] = useState<FilterType>('all');
 
   useEffect(() => {
@@ -51,7 +53,7 @@ export function RecipeBox() {
               : `${recipes.length} recipe${recipes.length === 1 ? '' : 's'} saved.`}
           </p>
         </div>
-        <Button onClick={() => setView({ name: 'extract' })} className="gap-2">
+        <Button onClick={() => router.push('/')} className="gap-2">
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">New Recipe</span>
         </Button>
@@ -117,7 +119,7 @@ export function RecipeBox() {
                     : 'Paste an Instagram reel URL to extract your first recipe.'}
               </p>
             </div>
-            <Button onClick={() => setView({ name: 'extract' })} className="gap-2 mt-4">
+            <Button onClick={() => router.push('/')} className="gap-2 mt-4">
               <Plus className="h-4 w-4" />
               Extract a Recipe
             </Button>

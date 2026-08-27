@@ -1,4 +1,5 @@
 'use client';
+import { useRouter } from 'next/navigation';
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -51,8 +52,12 @@ function getMetadataIcon(key: string) {
 }
 
 export function RecipeDetail() {
-  const { view, recipes, updateRecipe, removeRecipe, setView, authToken } = useStore();
-  const recipeId = view.name === 'detail' ? view.recipeId : null;
+  const router = useRouter();
+  const { recipes, updateRecipe, removeRecipe, authToken } = useStore();
+  // Get recipeId from the URL pathname.
+  const recipeId = typeof window !== 'undefined'
+    ? window.location.pathname.split('/recipes/')[1] || null
+    : null;
 
   const [recipe, setRecipe] = useState<SavedRecipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -344,7 +349,7 @@ export function RecipeDetail() {
     // This ensures the recipe disappears immediately even if the API is slow.
     removeRecipe(recipeId);
     toast.success('Recipe deleted.');
-    setView({ name: 'box' });
+    router.push('/recipes');
 
     // Then delete from the DB in the background (don't block the UI).
     if (!recipeId.startsWith('temp-')) {
@@ -410,7 +415,7 @@ export function RecipeDetail() {
     return (
       <div className="text-center py-20 space-y-4">
         <p className="text-muted-foreground">Recipe not found.</p>
-        <Button onClick={() => setView({ name: 'box' })}>Back to Recipe Box</Button>
+        <Button onClick={() => router.push('/recipes')}>Back to Recipe Box</Button>
       </div>
     );
   }
@@ -419,7 +424,7 @@ export function RecipeDetail() {
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Top bar */}
       <div className="flex items-center justify-between">
-        <Button variant="ghost" size="sm" onClick={() => setView({ name: 'box' })} className="gap-1.5">
+        <Button variant="ghost" size="sm" onClick={() => router.push('/recipes')} className="gap-1.5">
           <ArrowLeft className="h-4 w-4" />
           Back
         </Button>
