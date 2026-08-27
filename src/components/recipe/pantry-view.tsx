@@ -1,13 +1,21 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, AlertTriangle, X, ShoppingCart, Package, ScanLine, Loader2, Camera } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle, X, Package, ScanLine, Loader2, ChevronRight, Percent } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Slider } from '@/components/ui/slider';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet';
 import { toast } from 'sonner';
+import { useStore } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
@@ -30,6 +38,7 @@ const CATEGORIES = [
 ];
 
 export function PantryView() {
+  const { authToken } = useStore();
   const [items, setItems] = useState<PantryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -41,15 +50,16 @@ export function PantryView() {
   const [scanning, setScanning] = useState(false);
   const [barcodeValue, setBarcodeValue] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<PantryItem | null>(null);
+  const [fillPercent, setFillPercent] = useState(100);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
-  const authToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+
+  const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
   const fetchItems = useCallback(async () => {
     try {
-      const res = await fetch('/api/pantry', {
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
+      const res = await fetch('/api/pantry', { headers: authHeaders });
       const data = await res.json();
       setItems(data.items || []);
     } catch {
@@ -70,7 +80,7 @@ export function PantryView() {
     try {
       const res = await fetch('/api/pantry', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           name: newName.trim(),
           quantity: newQuantity || undefined,
@@ -91,50 +101,33 @@ export function PantryView() {
     }
   }
 
-  // Barcode scanning using ZXing live camera — works on iOS Safari with high-res camera.
+  // Barcode scanning using ZXing live camera.
   async function startBarcodeScan() {
     setScanning(true);
-
     await new Promise((r) => setTimeout(r, 200));
 
     try {
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-        BarcodeFormat.EAN_13,
-        BarcodeFormat.EAN_8,
-        BarcodeFormat.UPC_A,
-        BarcodeFormat.UPC_E,
-        BarcodeFormat.CODE_128,
+        BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.CODE_128,
       ]);
       hints.set(DecodeHintType.TRY_HARDER, true);
-
       const reader = new BrowserMultiFormatReader(hints);
 
-      const constraints = {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-      };
-
       const controls = await reader.decodeFromConstraints(
-        constraints,
+        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
         videoRef.current!,
         (result, _error) => {
           if (result) {
             const code = result.getText();
             setBarcodeValue(code);
             stopScan();
-            // Auto-lookup the product name from the barcode.
             lookupProduct(code);
           }
         },
       );
-
       scannerRef.current = controls;
-    } catch (err) {
-      console.error('[barcode] Camera error:', err);
+    } catch {
       toast.error('Could not access camera.');
       setScanning(false);
     }
@@ -149,15 +142,10 @@ export function PantryView() {
   }
 
   useEffect(() => {
-    return () => {
-      if (scannerRef.current) {
-        scannerRef.current.stop();
-      }
-    };
+    return () => { if (scannerRef.current) scannerRef.current.stop(); };
   }, []);
 
-  // Look up product name from barcode using Open Food Facts API (free, no API key).
-  // Then uses Gemini to estimate quantity, generic name, category, and expiry.
+  // Look up product from Open Food Facts + Gemini enrichment.
   async function lookupProduct(barcode: string) {
     setLookingUp(true);
     setShowAdd(true);
@@ -171,40 +159,36 @@ export function PantryView() {
       let productName = '';
       let productQuantity = '';
       let productCategory = '';
-      let productImage = '';
 
       if (data.status === 1 && data.product) {
         const p = data.product;
         productName = p.product_name || p.generic_name || '';
         productQuantity = p.quantity || '';
-        productImage = p.image_front_url || p.image_url || '';
-
-        // Get category from tags.
         const categories = p.categories_tags || [];
         if (categories.length > 0) {
           const firstCat = categories[0].replace('en:', '').replace(/-/g, ' ');
           productCategory = firstCat.charAt(0).toUpperCase() + firstCat.slice(1);
         }
 
-        if (productName) {
-          setNewName(productName);
-          toast.success(`Found: ${productName}`);
-        }
-
-        if (productQuantity) {
-          setNewQuantity(productQuantity);
-        }
-
-        if (productCategory) {
-          setNewCategory(productCategory);
-        }
-      } else {
-        toast.info('Product not found in Open Food Facts. Using AI to categorize...');
+        if (productName) { setNewName(productName); toast.success(`Found: ${productName}`); }
+        if (productQuantity) setNewQuantity(productQuantity);
+        if (productCategory) setNewCategory(productCategory);
       }
 
-      // Use Gemini to estimate generic name, category (if not set), quantity (if not set),
-      // and a suggested expiry date based on the product type.
-      await enrichWithAI(barcode, productName, productQuantity, productCategory);
+      // Gemini enrichment for missing fields.
+      try {
+        const enrichRes = await fetch('/api/pantry/enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ barcode, name: productName, quantity: productQuantity, category: productCategory }),
+        });
+        if (enrichRes.ok) {
+          const enrichData = await enrichRes.json();
+          if (enrichData.quantity && !productQuantity) setNewQuantity(enrichData.quantity);
+          if (enrichData.category && !productCategory) setNewCategory(enrichData.category);
+          if (enrichData.expiryDate) setNewExpiry(enrichData.expiryDate);
+        }
+      } catch {}
     } catch {
       toast.info('Could not look up product. Enter details manually.');
     } finally {
@@ -212,70 +196,25 @@ export function PantryView() {
     }
   }
 
-  // Uses Gemini to estimate missing fields: generic name, category, quantity, expiry.
-  async function enrichWithAI(barcode: string, name: string, quantity: string, category: string) {
-    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
-    // We can't use the server-side GEMINI_API_KEY from the client, so we call
-    // our own API endpoint to do the enrichment server-side.
-    try {
-      const res = await fetch('/api/pantry/enrich', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode, name, quantity, category }),
-      });
-
-      if (!res.ok) return;
-
-      const data = await res.json();
-      if (data.genericName) {
-        // genericName is set on the server when saving, but we can show it.
-        // We don't have a separate field for it in the UI — it's stored silently.
-      }
-      if (data.quantity && !quantity) {
-        setNewQuantity(data.quantity);
-      }
-      if (data.category && !category) {
-        setNewCategory(data.category);
-      }
-      if (data.expiryDate) {
-        setNewExpiry(data.expiryDate);
-      }
-    } catch {
-      // Silent fail — enrichment is optional.
-    }
-  }
-
-  async function toggleRunningLow(item: PantryItem) {
-    const updated = { ...item, isRunningLow: !item.isRunningLow };
-    setItems(items.map((i) => (i.id === item.id ? updated : i)));
-    await fetch(`/api/pantry/${item.id}`, {
+  async function updateItem(id: string, updates: Record<string, unknown>) {
+    setItems(items.map((i) => (i.id === id ? { ...i, ...updates } as PantryItem : i)));
+    await fetch(`/api/pantry/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
-      body: JSON.stringify({ isRunningLow: !item.isRunningLow }),
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(updates),
     });
   }
 
   async function deleteItem(id: string) {
     setItems(items.filter((i) => i.id !== id));
-    await fetch(`/api/pantry/${id}`, {
-      method: 'DELETE',
-      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-    });
+    setSelectedItem(null);
+    await fetch(`/api/pantry/${id}`, { method: 'DELETE', headers: authHeaders });
     toast.success('Removed from pantry.');
   }
 
-  // Group items by category.
   const categories = Array.from(new Set(items.map((i) => i.category || 'Other'))).sort();
   const filtered = filter === 'all' ? items : items.filter((i) => (i.category || 'Other') === filter);
-
-  // Check for expiring soon.
   const now = new Date();
-  const expiringSoon = items.filter((i) => {
-    if (!i.expiryDate) return false;
-    const d = new Date(i.expiryDate);
-    const diff = (d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-    return diff <= 3 && diff >= 0;
-  });
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
@@ -321,33 +260,20 @@ export function PantryView() {
         </Card>
       )}
 
-      {/* Expiring soon alert */}
-      {expiringSoon.length > 0 && (
-        <Card className="border-amber-300/50 bg-amber-50/50">
-          <CardContent className="py-3 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            <span className="text-sm">{expiringSoon.length} item{expiringSoon.length > 1 ? 's' : ''} expiring soon:</span>
-            <span className="text-sm font-medium">{expiringSoon.map((i) => i.name).join(', ')}</span>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Add form */}
       {showAdd && (
         <Card>
           <CardContent className="pt-4">
             <form onSubmit={addItem} className="space-y-3">
-              <div className="flex flex-col sm:flex-row gap-2">
-                <Input placeholder="Product name..." value={newName} onChange={(e) => setNewName(e.target.value)} className="flex-1" />
-                <Input placeholder="Qty (e.g. 500g)" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} className="w-full sm:w-32" />
+              <Input placeholder="Product name..." value={newName} onChange={(e) => setNewName(e.target.value)} className="h-10" />
+              <div className="flex gap-2">
+                <Input placeholder="Qty (e.g. 500g)" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} className="flex-1 min-w-0 h-10" />
+                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-[150px] shrink-0 h-10" />
               </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1 min-w-0 h-9 rounded-md border border-input bg-background px-3 text-sm">
-                  <option value="">Auto-categorize</option>
-                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <Input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)} className="w-full sm:w-auto min-w-0" />
-              </div>
+              <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+                <option value="">Auto-categorize</option>
+                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
               {barcodeValue && (
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">Barcode: {barcodeValue}</Badge>
@@ -361,7 +287,6 @@ export function PantryView() {
                 <Button type="submit" size="sm">Add</Button>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
               </div>
-              <p className="text-xs text-muted-foreground">Category and generic name are auto-assigned using AI if not specified.</p>
             </form>
           </CardContent>
         </Card>
@@ -391,7 +316,7 @@ export function PantryView() {
           <p className="text-muted-foreground">{items.length === 0 ? 'Your pantry is empty. Add items to track what you have.' : 'No items in this category.'}</p>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {filtered.map((item) => {
             const expiry = item.expiryDate ? new Date(item.expiryDate) : null;
             const daysToExpiry = expiry ? Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null;
@@ -399,29 +324,117 @@ export function PantryView() {
             const isExpiringSoon = daysToExpiry !== null && daysToExpiry >= 0 && daysToExpiry <= 3;
 
             return (
-              <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg border border-border/60 hover:bg-muted/30 transition-colors">
-                <Checkbox checked={item.isRunningLow} onCheckedChange={() => toggleRunningLow(item)} />
+              <button
+                key={item.id}
+                onClick={() => {
+                  setSelectedItem(item);
+                  setFillPercent(100); // Could load from DB if we store it.
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-lg border border-border/60 hover:bg-muted/30 transition-colors text-left"
+              >
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm truncate">{item.name}</span>
-                    {item.quantity && <span className="text-xs text-muted-foreground">{item.quantity}</span>}
-                    {item.isRunningLow && <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">Low</Badge>}
-                    {item.category && <Badge variant="secondary" className="text-xs">{item.category}</Badge>}
+                    {item.quantity && <span className="text-xs text-muted-foreground shrink-0">{item.quantity}</span>}
                   </div>
-                  {expiry && (
-                    <span className={`text-xs ${isExpired ? 'text-red-500' : isExpiringSoon ? 'text-amber-500' : 'text-muted-foreground'}`}>
-                      {isExpired ? 'Expired' : `Expires in ${daysToExpiry} day${daysToExpiry !== 1 ? 's' : ''}`}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2 mt-0.5">
+                    {item.category && <span className="text-xs text-muted-foreground">{item.category}</span>}
+                    {item.isRunningLow && <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 h-4 px-1">Low</Badge>}
+                    {expiry && (
+                      <span className={`text-xs ${isExpired ? 'text-red-500' : isExpiringSoon ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                        {isExpired ? 'Expired' : `${daysToExpiry}d`}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <button onClick={() => deleteItem(item.id)} className="text-muted-foreground hover:text-destructive p-1">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              </button>
             );
           })}
         </div>
       )}
+
+      {/* Item detail sheet */}
+      <Sheet open={!!selectedItem} onOpenChange={(open) => !open && setSelectedItem(null)}>
+        <SheetContent className="overflow-y-auto">
+          {selectedItem && (
+            <>
+              <SheetHeader>
+                <SheetTitle>{selectedItem.name}</SheetTitle>
+                <SheetDescription>
+                  {selectedItem.category} {selectedItem.quantity && `· ${selectedItem.quantity}`}
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="space-y-4 mt-4">
+                {/* Fill level slider */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium flex items-center gap-1.5">
+                      <Percent className="h-3.5 w-3.5" />
+                      Fill level
+                    </label>
+                    <span className="text-sm text-muted-foreground tabular-nums">{fillPercent}%</span>
+                  </div>
+                  <Slider
+                    value={[fillPercent]}
+                    onValueChange={(v) => setFillPercent(v[0])}
+                    max={100}
+                    step={10}
+                    className="w-full"
+                  />
+                  {fillPercent <= 20 && (
+                    <p className="text-xs text-amber-500">Running low — consider adding to shopping list</p>
+                  )}
+                </div>
+
+                {/* Expiry info */}
+                {selectedItem.expiryDate && (
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-xs text-muted-foreground">Expiry date</p>
+                    <p className="text-sm font-medium">
+                      {new Date(selectedItem.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </p>
+                  </div>
+                )}
+
+                {/* Barcode */}
+                {selectedItem.barcode && (
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-xs text-muted-foreground">Barcode</p>
+                    <p className="text-sm font-mono">{selectedItem.barcode}</p>
+                  </div>
+                )}
+
+                {/* Running low toggle */}
+                <Button
+                  variant={selectedItem.isRunningLow ? 'default' : 'outline'}
+                  size="sm"
+                  className="w-full"
+                  onClick={() => {
+                    const updated = { isRunningLow: !selectedItem.isRunningLow };
+                    updateItem(selectedItem.id, updated);
+                    setSelectedItem({ ...selectedItem, ...updated });
+                  }}
+                >
+                  {selectedItem.isRunningLow ? 'Marked as running low' : 'Mark as running low'}
+                </Button>
+
+                {/* Delete */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full text-destructive hover:text-destructive gap-1.5"
+                  onClick={() => deleteItem(selectedItem.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete item
+                </Button>
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
