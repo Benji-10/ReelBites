@@ -33,26 +33,275 @@ interface RecipePantryIntegrationProps {
   recipe: SavedRecipe;
 }
 
+// =============================================================================
+// INGREDIENT MATCHING ENGINE
+// =============================================================================
+//
+// The matching uses three layers:
+//   1. Canonicalization — normalize names (lowercase, strip qualifiers, singularize, apply synonym map)
+//   2. Synonym map — map regional/variant names to a canonical form
+//      (e.g. "capsicum" → "bell pepper", "chilli flakes" → "red pepper flakes")
+//   3. Prefix matching — if one canonical name is a prefix of the other, they match
+//      (e.g. "chicken breast" matches "chicken breast tenders", but "olive oil" does NOT match "vegetable oil")
+//
+// This is deliberately conservative: it's better to miss a match (user adds to
+// shopping list unnecessarily) than to false-positive (user thinks they have
+// an ingredient they don't).
+
+// Regional / variant names → canonical form.
+// All keys and values are lowercase, singular.
+const SYNONYMS: Record<string, string> = {
+  // --- Peppers ---
+  'capsicum': 'bell pepper',
+  'sweet pepper': 'bell pepper',
+  'sweet capsicum': 'bell pepper',
+  'red capsicum': 'red bell pepper',
+  'green capsicum': 'green bell pepper',
+  'yellow capsicum': 'yellow bell pepper',
+  'crushed red pepper': 'red pepper flakes',
+  'crushed red pepper flakes': 'red pepper flakes',
+  'chilli flake': 'red pepper flakes',
+  'chilli flakes': 'red pepper flakes',
+  'chili flake': 'red pepper flakes',
+  'chili flakes': 'red pepper flakes',
+  'red chili flake': 'red pepper flakes',
+  'red chili flakes': 'red pepper flakes',
+  'red pepper flake': 'red pepper flakes',
+  'crushed chili flake': 'red pepper flakes',
+  'crushed chili flakes': 'red pepper flakes',
+  'chilli powder': 'chili powder',
+  'chile powder': 'chili powder',
+  'chili powder': 'chili powder',
+
+  // --- Herbs ---
+  'coriander leaf': 'cilantro',
+  'coriander leaves': 'cilantro',
+  'fresh coriander': 'cilantro',
+  'cilantro leaf': 'cilantro',
+  'italian herb': 'italian seasoning',
+  'italian herbs': 'italian seasoning',
+  'mixed herbs': 'italian seasoning',
+  'herbes de provence': 'italian seasoning',
+
+  // --- Vegetables ---
+  'aubergine': 'eggplant',
+  'courgette': 'zucchini',
+  'spring onion': 'scallion',
+  'green onion': 'scallion',
+  'spring onions': 'scallion',
+  'green onions': 'scallion',
+  'rocket': 'arugula',
+  'ruccola': 'arugula',
+  'beetroot': 'beet',
+  'swede': 'rutabaga',
+  'sweet potato': 'sweet potato',
+  'yam': 'sweet potato',
+
+  // --- Meat ---
+  'minced beef': 'ground beef',
+  'mince': 'ground beef',
+  'beef mince': 'ground beef',
+  'minced pork': 'ground pork',
+  'pork mince': 'ground pork',
+  'minced chicken': 'ground chicken',
+  'chicken mince': 'ground chicken',
+  'minced lamb': 'ground lamb',
+  'lamb mince': 'ground lamb',
+
+  // --- Seafood ---
+  'prawn': 'shrimp',
+  'prawns': 'shrimp',
+
+  // --- Dairy ---
+  'heavy cream': 'double cream',
+  'whipping cream': 'double cream',
+  'light cream': 'single cream',
+  'half and half': 'single cream',
+
+  // --- Spices ---
+  'coriander seed': 'coriander',
+  'coriander seeds': 'coriander',
+  'cumin seed': 'cumin',
+  'cumin seeds': 'cumin',
+  'fennel seed': 'fennel',
+  'fennel seeds': 'fennel',
+  'mustard seed': 'mustard',
+  'mustard seeds': 'mustard',
+
+  // --- Other ---
+  'powdered sugar': 'icing sugar',
+  'confectioners sugar': 'icing sugar',
+  'caster sugar': 'castor sugar',
+  'superfine sugar': 'castor sugar',
+  'brown sugar': 'brown sugar',
+  'raw sugar': 'turbinado sugar',
+  'demerara sugar': 'turbinado sugar',
+
+  // --- Oils (DON'T match different oils together) ---
+  // No synonyms here — olive oil ≠ vegetable oil ≠ sunflower oil.
+
+  // --- Flours ---
+  'plain flour': 'all purpose flour',
+  'plain wheat flour': 'all purpose flour',
+  'self raising flour': 'self raising flour',
+  'self-rising flour': 'self raising flour',
+};
+
+// Qualifiers that describe state/quality, NOT the ingredient identity.
+// These get stripped during canonicalization.
+// IMPORTANT: do NOT include cut/form words (breast, thigh, powder, etc.) —
+// those are part of the ingredient identity.
+const QUALIFIERS = /\b(fresh|frozen|organic|natural|raw|cooked|fine|coarse|premium|grade\s+[a-z])\b/g;
+
+/**
+ * Canonicalize an ingredient name for matching.
+ * - Lowercase
+ * - Strip parenthetical notes and percentages
+ * - Strip quality qualifiers (fresh, organic, etc.)
+ * - Singularize
+ * - Apply synonym map
+ */
+function canonicalize(name: string): string {
+  if (!name) return '';
+  let n = name.toLowerCase().trim();
+
+  // Remove parenthetical notes: "garlic (minced)" → "garlic"
+  n = n.replace(/\([^)]*\)/g, ' ');
+  // Remove percentages: "95%" → ""
+  n = n.replace(/\d+%/g, ' ');
+  // Remove quality qualifiers
+  n = n.replace(QUALIFIERS, ' ');
+  // Remove dash-separated cruft: "Chicken Breast Tenders - Fresh Natural" → "chicken breast tenders natural"
+  // (dashes become spaces, then qualifiers get stripped above)
+  n = n.replace(/[-_]/g, ' ');
+  // Normalize whitespace
+  n = n.replace(/\s+/g, ' ').trim();
+
+  // Singularize (simple rules — handles most food words)
+  if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
+  else if (n.endsWith('ses')) n = n.slice(0, -2);
+  else if (n.endsWith('s') && !n.endsWith('ss') && !n.endsWith('us') && !n.endsWith('is')) {
+    n = n.slice(0, -1);
+  }
+  n = n.trim();
+
+  // Apply synonym map — check multi-word phrases first (longest match).
+  // Sort keys by length descending so "crushed red pepper" matches before "red pepper".
+  const sortedKeys = Object.keys(SYNONYMS).sort((a, b) => b.length - a.length);
+  for (const key of sortedKeys) {
+    const regex = new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (regex.test(n)) {
+      n = n.replace(regex, SYNONYMS[key]);
+      n = n.replace(/\s+/g, ' ').trim();
+      break; // Only apply the first (longest) match
+    }
+  }
+
+  return n.trim();
+}
+
+/**
+ * Expand "X or Y" into variants. Handles the common pattern where the second
+ * part inherits the first word: "garlic granules or powder" → ["garlic granules", "garlic powder"].
+ */
+function expandVariants(name: string): string[] {
+  if (!name.includes(' or ')) return [name];
+  const parts = name.split(/\s+or\s+/);
+  const variants: string[] = [parts[0].trim()];
+  const firstWords = parts[0].split(' ').filter((w) => w.length > 0);
+
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i].trim();
+    if (!part) continue;
+    const partWords = part.split(' ');
+    // If the part doesn't start with the first word of part[0], prepend it.
+    // "garlic granules or powder" → "powder" becomes "garlic powder"
+    if (firstWords.length > 0 && partWords[0] !== firstWords[0]) {
+      variants.push(firstWords[0] + ' ' + part);
+    } else {
+      variants.push(part);
+    }
+  }
+  return variants;
+}
+
+/**
+ * Check if a recipe ingredient matches a pantry item.
+ * Conservative: prefers false negatives (missing) over false positives (wrong match).
+ */
+function isIngredientMatch(
+  recipeName: string,
+  pantryName: string,
+  pantryGeneric: string,
+): boolean {
+  const canonicalRecipe = canonicalize(recipeName);
+  const canonicalPantry = canonicalize(pantryName);
+  const canonicalGeneric = canonicalize(pantryGeneric || '');
+
+  if (!canonicalRecipe) return false;
+
+  // Try each variant of the recipe name (handles "X or Y")
+  const variants = expandVariants(canonicalRecipe);
+
+  for (const variant of variants) {
+    if (!variant) continue;
+
+    // 1. Exact match
+    if (variant === canonicalPantry) return true;
+    if (canonicalGeneric && variant === canonicalGeneric) return true;
+
+    // 2. Prefix match — one is a prefix of the other.
+    //    "chicken breast" matches "chicken breast tenders" ✓
+    //    "olive oil" does NOT match "vegetable oil" ✗
+    //    "garlic" matches "garlic powder" ✓ (recipe is generic, pantry is specific form)
+    if (canonicalPantry.startsWith(variant + ' ') || variant.startsWith(canonicalPantry + ' ')) {
+      return true;
+    }
+    if (canonicalGeneric && (canonicalGeneric.startsWith(variant + ' ') || variant.startsWith(canonicalGeneric + ' '))) {
+      return true;
+    }
+
+    // 3. Word-level containment (for "or" patterns like "garlic granules or powder").
+    //    If ALL words of the pantry name appear in the recipe name in order, match.
+    //    Only applies when pantry has 2+ words (avoids "oil" matching "olive oil").
+    const pWords = canonicalPantry.split(' ').filter((w) => w.length > 0);
+    if (pWords.length >= 2) {
+      const vWords = variant.split(' ').filter((w) => w.length > 0);
+      let pi = 0;
+      for (let vi = 0; vi < vWords.length && pi < pWords.length; vi++) {
+        if (vWords[vi] === pWords[pi]) pi++;
+      }
+      if (pi === pWords.length) return true;
+    }
+  }
+
+  return false;
+}
+
+// =============================================================================
+// COMPONENT
+// =============================================================================
+
 export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps) {
-  const [pantryItems, setPantryItems] = useState<PantryItem[]>([]);
   const [shoppingLists, setShoppingLists] = useState<ShoppingList[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedListId, setSelectedListId] = useState<string>('');
   const [adding, setAdding] = useState(false);
-  const { authToken } = useStore();
+  const { authToken, pantryItems, fetchPantry } = useStore();
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [pantryRes, listsRes] = await Promise.all([
-          fetch('/api/pantry', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} }),
-          fetch('/api/shopping-lists', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} }),
-        ]);
+        // Pantry items come from the store (cached for route switching).
+        // If the store is empty, fetch them.
+        if (pantryItems.length === 0) {
+          await fetchPantry();
+        }
 
-        const pantryData = await pantryRes.json();
+        const listsRes = await fetch('/api/shopping-lists', {
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
         const listsData = await listsRes.json();
-
-        setPantryItems(pantryData.items || []);
         setShoppingLists(listsData.lists || []);
         if (listsData.lists?.length > 0) {
           setSelectedListId(listsData.lists[0].id);
@@ -64,88 +313,20 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
       }
     }
     loadData();
-  }, [authToken]);
+  }, [authToken, pantryItems.length, fetchPantry]);
 
-  // Common ingredients that everyone has — don't show as "missing".
-  const PANTRY_STAPLES = [
-    'water', 'salt', 'pepper', 'black pepper', 'white pepper',
-    'oil', 'olive oil', 'vegetable oil', 'sunflower oil',
-    'sugar', 'flour',
-  ];
+  // Ingredients that are truly free — you don't have to buy them.
+  // Water is the only item that fits this: it comes out of the tap.
+  // Salt, pepper, oil, sugar, flour etc. are all things you have to buy,
+  // so they should NOT be assumed to be in the pantry.
+  const PANTRY_STAPLES = ['water'];
 
-  // Normalize a name for matching: lowercase, remove plurals, remove extra words.
-  function normalizeName(name: string): string {
-    let n = name.toLowerCase().trim();
-    // Remove common qualifiers.
-    n = n.replace(/\b(fresh|dried|ground|whole|chopped|sliced|diced|minced|grated|peeled|raw|cooked|lean|extra|fine|coarse)\b/g, '');
-    // Remove percentages like "95%".
-    n = n.replace(/\d+%/g, '');
-    // Remove parenthetical notes.
-    n = n.replace(/\([^)]*\)/g, '');
-    // Normalize whitespace.
-    n = n.replace(/\s+/g, ' ').trim();
-    // Simple plural → singular (handles most food words).
-    if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
-    else if (n.endsWith('ses')) n = n.slice(0, -2);
-    else if (n.endsWith('s') && !n.endsWith('ss')) n = n.slice(0, -1);
-    return n.trim();
-  }
-
-  // Check if two ingredient names are a real match (not a false positive).
-  function isIngredientMatch(recipeName: string, pantryName: string, pantryGeneric: string): boolean {
-    const rNorm = normalizeName(recipeName);
-    const pNorm = normalizeName(pantryName);
-    const gNorm = normalizeName(pantryGeneric || '');
-
-    // Exact match (after normalization).
-    if (rNorm === pNorm || rNorm === gNorm) return true;
-
-    // Word-level matching: split into words and check if the core word matches.
-    // "crushed red pepper" → core word "pepper"
-    // "black pepper" → core word "pepper" → match
-    // "pepper" → "pepper" → match
-    // But "red pepper" vs "black pepper" should still match since both are "pepper"
-    // However "pepper" vs "bell pepper" should NOT match (different ingredient).
-    // We use the LAST word as the "type" word for matching.
-    const rWords = rNorm.split(' ').filter((w) => w.length > 2);
-    const pWords = pNorm.split(' ').filter((w) => w.length > 2);
-    const gWords = gNorm.split(' ').filter((w) => w.length > 2);
-
-    // If one is a single word and the other is multi-word, check if the
-    // single word equals the last word of the multi-word name.
-    if (rWords.length === 1 && pWords.length > 1) {
-      return rWords[0] === pWords[pWords.length - 1];
-    }
-    if (pWords.length === 1 && rWords.length > 1) {
-      return pWords[0] === rWords[rWords.length - 1];
-    }
-    if (rWords.length === 1 && gWords.length > 1) {
-      return rWords[0] === gWords[gWords.length - 1];
-    }
-    if (gWords.length === 1 && rWords.length > 1) {
-      return gWords[0] === rWords[rWords.length - 1];
-    }
-
-    // For multi-word names, check if one fully contains the other's core words.
-    if (rWords.length > 1 && pWords.length > 1) {
-      const rCore = rWords[rWords.length - 1];
-      const pCore = pWords[pWords.length - 1];
-      // Only match if the "type" word matches AND at least one other word matches.
-      if (rCore === pCore) {
-        const rSet = new Set(rWords);
-        const pSet = new Set(pWords);
-        const overlap = [...rSet].filter((w) => pSet.has(w));
-        return overlap.length >= 1;
-      }
-    }
-
-    return false;
-  }
-
-  // Match recipe ingredients against pantry items using improved matching.
+  // Match recipe ingredients against pantry items using the matching engine.
   const ingredientStatus = (recipe.ingredients || []).map((ing, idx) => {
     const ingNameLower = ing.name.toLowerCase().trim();
-    const isStaple = PANTRY_STAPLES.some((s) => ingNameLower === s || ingNameLower.startsWith(s + ' '));
+    const isStaple = PANTRY_STAPLES.some(
+      (s) => ingNameLower === s || ingNameLower.startsWith(s + ' '),
+    );
 
     // If it's a staple, always show as "have".
     if (isStaple) {
@@ -178,19 +359,24 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
     try {
       const items = missingIngredients.map((ing) => ({
         name: ing.name,
-        genericName: ing.name.toLowerCase(),
+        genericName: canonicalize(ing.name),
         quantity: ing.amount ? `${ing.amount}${ing.unit ? ' ' + ing.unit : ''}` : undefined,
         recipeId: recipe.id,
       }));
 
       const res = await fetch(`/api/shopping-lists/${selectedListId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify(items),
       });
 
       if (!res.ok) throw new Error('Failed to add items.');
-      toast.success(`${missingIngredients.length} item${missingIngredients.length > 1 ? 's' : ''} added to shopping list.`);
+      toast.success(
+        `${missingIngredients.length} item${missingIngredients.length > 1 ? 's' : ''} added to shopping list.`,
+      );
     } catch {
       toast.error('Could not add items to shopping list.');
     } finally {
@@ -260,11 +446,14 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
               </span>
               {(ingredient.amount || ingredient.unit) && (
                 <span className="text-xs text-muted-foreground">
-                  {ingredient.amount}{ingredient.unit && ` ${ingredient.unit}`}
+                  {ingredient.amount}
+                  {ingredient.unit && ` ${ingredient.unit}`}
                 </span>
               )}
               {inPantry && pantryItem?.isRunningLow && (
-                <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">Low</Badge>
+                <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                  Low
+                </Badge>
               )}
             </div>
           ))}

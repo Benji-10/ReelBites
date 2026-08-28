@@ -43,7 +43,25 @@ async function categorizeWithAI(name: string): Promise<{ category: string; gener
     });
 
     const result = await model.generateContent(
-      `Categorize this food product. Return JSON with "category" (one of: ${FOOD_CATEGORIES.join(', ')}) and "genericName" (a normalized lowercase name for lookups, e.g. "spaghetti" → "pasta", "whole milk" → "milk").
+      `Categorize this food product. Return JSON with "category" (one of: ${FOOD_CATEGORIES.join(', ')}) and "genericName" (a normalized lowercase name for matching against recipe ingredients).
+
+IMPORTANT RULES for genericName:
+- PRESERVE the cut/type of meat: "chicken breast" NOT "chicken", "chicken thigh" NOT "chicken", "beef sirloin" NOT "beef"
+- PRESERVE the form: "garlic powder" NOT "garlic", "grated parmesan" NOT "parmesan", "crushed tomatoes" NOT "tomatoes"
+- PRESERVE the variety: "spaghetti" NOT "pasta", "baby spinach" NOT "spinach", "red onion" NOT "onion"
+- STRIP brand names, store names, and marketing words: "Tesco", "Organic", "Premium", "Fresh", "Natural"
+- STRIP quantities and percentages: "500g", "95%", "2-pack"
+- STRIP quality descriptors: "finest", "best", "value"
+- Map regional synonyms to the more common name: "capsicum" → "bell pepper", "aubergine" → "eggplant", "courgette" → "zucchini", "minced beef" → "ground beef", "spring onion" → "scallion"
+
+Examples:
+- "Chicken Breast Tenders - Fresh Natural" → "chicken breast"
+- "Tesco Spaghetti 500g" → "spaghetti"
+- "Organic Crushed Red Pepper" → "red pepper flakes"
+- "Whole Milk 2L" → "whole milk"
+- "Lean Ground Beef 95%" → "ground beef"
+- "Fresh Basil Bunch" → "fresh basil"
+- "Red Capsicum" → "red bell pepper"
 
 Product: "${name}"
 

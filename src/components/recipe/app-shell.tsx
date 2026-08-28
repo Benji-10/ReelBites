@@ -25,11 +25,9 @@ export function AppShell({ viewName, recipeId }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, token, isReady, login, signup, logout } = useNetlifyIdentity();
-  const { setAuthToken, fetchRecipes } = useStore();
+  const { setAuthToken, fetchRecipes, fetchPantry, fetchShoppingLists, pantryItems, shoppingLists } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { loadFromStorage, syncFromServer, syncToServer } = useSettings();
-  const [pantryCount, setPantryCount] = useState(0);
-  const [shoppingCount, setShoppingCount] = useState(0);
 
   // Determine the current view: use prop, then fall back to pathname.
   const currentView: ViewName = viewName || (() => {
@@ -58,26 +56,23 @@ export function AppShell({ viewName, recipeId }: AppShellProps) {
     setAuthToken(token);
   }, [token, setAuthToken]);
 
+  // Fetch all user data when token becomes available.
+  // Data is cached in the store so route switching is instant.
   useEffect(() => {
     if (user && token) {
       syncFromServer(token);
       fetchRecipes();
+      fetchPantry();
+      fetchShoppingLists();
     }
-  }, [user, token, syncFromServer, fetchRecipes]);
+  }, [user, token, syncFromServer, fetchRecipes, fetchPantry, fetchShoppingLists]);
 
-  useEffect(() => {
-    if (token) {
-      const headers = { Authorization: `Bearer ${token}` };
-      Promise.all([
-        fetch('/api/pantry', { headers }).then((r) => r.json()).catch(() => ({ items: [] })),
-        fetch('/api/shopping-lists', { headers }).then((r) => r.json()).catch(() => ({ lists: [] })),
-      ]).then(([pantryData, listsData]) => {
-        setPantryCount(pantryData.items?.length || 0);
-        const allItems = (listsData.lists || []).flatMap((l: { items: unknown[] }) => l.items || []);
-        setShoppingCount(allItems.filter((i: { isChecked: boolean }) => !(i as { isChecked: boolean }).isChecked).length);
-      });
-    }
-  }, [token]);
+  // Derived counts from cached store data (no extra fetch needed).
+  const pantryCount = pantryItems.length;
+  const shoppingCount = shoppingLists.reduce(
+    (sum, list) => sum + (list.items?.filter((i) => !i.isChecked).length || 0),
+    0,
+  );
 
   useEffect(() => {
     const handleSettingsChange = () => {

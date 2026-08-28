@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
   ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight, Maximize2,
-  Star, Tag, FolderPlus, ChefHat as ChefIcon,
+  Star, Tag, FolderPlus, ChefHat as ChefIcon, Share2, Copy, Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,7 +87,9 @@ export function RecipeDetail() {
 
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
-    setLoading(true);
+    // Only show loading spinner on the FIRST load (when we have no recipe yet).
+    // When the token loads later and triggers a re-fetch, don't flash the spinner.
+    if (!recipe) setLoading(true);
 
     // Try to find in the store first (instant if available).
     let fromStore = recipes.find((r) => r.id === recipeId);
@@ -104,45 +111,48 @@ export function RecipeDetail() {
       return;
     }
 
-    // Fetch from API. Use a small delay to let the auth token settle
-    // after navigation (prevents the 404 → retry race condition).
-    await new Promise((r) => setTimeout(r, 300));
+    // Helper to apply recipe data to state.
+    const applyRecipe = (r: NonNullable<typeof recipe>) => {
+      setRecipe(r);
+      setEditTitle(r.title);
+      setEditDescription(r.description || '');
+      setEditIngredients([...(r.ingredients || [])]);
+      setEditInstructions([...(r.instructions || [])]);
+      setEditMetadata([...(r.metadata || [])]);
+      setEditSourceUrl(r.sourceUrl || '');
+    };
 
     try {
-      const response = await fetch(`/api/recipes/${recipeId}`, {
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
-      if (!response.ok) {
-        // If 404, retry once after a longer delay (token may still be loading).
-        if (response.status === 404) {
-          await new Promise((r) => setTimeout(r, 500));
-          const retry = await fetch(`/api/recipes/${recipeId}`, {
-            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-          });
-          if (!retry.ok) throw new Error('Failed to load recipe.');
-          const retryData = await retry.json();
-          if (retryData.recipe) {
-            setRecipe(retryData.recipe);
-            setEditTitle(retryData.recipe.title);
-            setEditDescription(retryData.recipe.description || '');
-            setEditIngredients([...(retryData.recipe.ingredients || [])]);
-            setEditInstructions([...(retryData.recipe.instructions || [])]);
-            setEditMetadata([...(retryData.recipe.metadata || [])]);
-            setEditSourceUrl(retryData.recipe.sourceUrl || '');
+      // Strategy: try the private endpoint first (if we have a token).
+      // If it 404s (token not loaded yet on hard refresh, or recipe belongs
+      // to another user), fall back to the PUBLIC endpoint which works
+      // without auth. This fixes the 404-on-refresh bug.
+      let privateRecipe: NonNullable<typeof recipe> | null = null;
+
+      if (authToken) {
+        const response = await fetch(`/api/recipes/${recipeId}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.recipe) privateRecipe = data.recipe;
+        }
+      }
+
+      if (privateRecipe) {
+        applyRecipe(privateRecipe);
+      } else {
+        // Fall back to public endpoint (no auth needed).
+        const publicResponse = await fetch(`/api/recipes/${recipeId}/public`);
+        if (publicResponse.ok) {
+          const publicData = await publicResponse.json();
+          if (publicData.recipe) {
+            applyRecipe(publicData.recipe);
+          } else {
+            throw new Error('Recipe not found.');
           }
         } else {
-          throw new Error('Failed to load recipe.');
-        }
-      } else {
-        const data = await response.json();
-        if (data.recipe) {
-          setRecipe(data.recipe);
-          setEditTitle(data.recipe.title);
-          setEditDescription(data.recipe.description || '');
-          setEditIngredients([...(data.recipe.ingredients || [])]);
-          setEditInstructions([...(data.recipe.instructions || [])]);
-          setEditMetadata([...(data.recipe.metadata || [])]);
-          setEditSourceUrl(data.recipe.sourceUrl || '');
+          throw new Error('Recipe not found.');
         }
       }
     } catch (err) {
@@ -153,7 +163,7 @@ export function RecipeDetail() {
     } finally {
       setLoading(false);
     }
-  }, [recipeId, recipes, authToken]);
+  }, [recipeId, recipes, authToken, recipe]);
 
   useEffect(() => {
     loadRecipe();
@@ -453,30 +463,33 @@ export function RecipeDetail() {
           <ArrowLeft className="h-4 w-4" />
           Back
         </Button>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-destructive hover:text-destructive">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete this recipe?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This action cannot be undone. The recipe &ldquo;{recipe.title}&rdquo; will be permanently removed.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleDelete}
-                className="bg-destructive text-white hover:bg-destructive/90"
-              >
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <div className="flex items-center gap-1">
+          <ShareButton recipeId={recipe.id} recipeTitle={recipe.title} />
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="ghost" size="sm" className="gap-1.5 text-destructive hover:text-destructive">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this recipe?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This action cannot be undone. The recipe &ldquo;{recipe.title}&rdquo; will be permanently removed.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className="bg-destructive text-white hover:bg-destructive/90"
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
 
       {/* Title & Description */}
@@ -922,5 +935,114 @@ function EditButton({ isEditing, onSave, onCancel, onEdit, saving, small }: Edit
       <Pencil className="h-3.5 w-3.5" />
       Edit
     </Button>
+  );
+}
+
+interface ShareButtonProps {
+  recipeId: string;
+  recipeTitle: string;
+}
+
+function ShareButton({ recipeId, recipeTitle }: ShareButtonProps) {
+  const [copied, setCopied] = useState(false);
+
+  // Temp IDs (recipe not yet saved to DB) can't be shared publicly.
+  const isTempId = recipeId.startsWith('temp-');
+
+  // Compute the share URL on the client (lazy initial state — runs once
+  // on mount, not on every render, so no cascading renders).
+  const [shareUrl] = useState<string>(() => {
+    if (typeof window === 'undefined' || isTempId) return '';
+    return `${window.location.origin}/r/${recipeId}`;
+  });
+
+  async function handleCopy() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      toast.success('Public link copied to clipboard!');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('Could not copy link. Long-press the URL to copy manually.');
+    }
+  }
+
+  async function handleNativeShare() {
+    if (!shareUrl) return;
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: recipeTitle,
+          text: `Check out this recipe: ${recipeTitle}`,
+          url: shareUrl,
+        });
+      } catch {
+        // User cancelled — no toast needed.
+      }
+    } else {
+      handleCopy();
+    }
+  }
+
+  if (isTempId) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        className="gap-1.5 opacity-50"
+        title="Recipe must be saved before sharing"
+      >
+        <Share2 className="h-4 w-4" />
+      </Button>
+    );
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5">
+          <Share2 className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" align="end">
+        <div className="space-y-3">
+          <div>
+            <p className="text-sm font-medium">Share recipe</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Anyone with this link can view the recipe — no login needed.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Input
+              readOnly
+              value={shareUrl}
+              className="text-xs font-mono h-8"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCopy}
+              className="h-8 shrink-0 gap-1"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+          {typeof navigator !== 'undefined' && navigator.share && (
+            <Button
+              size="sm"
+              onClick={handleNativeShare}
+              className="w-full gap-1.5"
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              Share via…
+            </Button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, X, ShoppingCart, Loader2, ScanLine, ShoppingBasket, Check, ChevronDown, ChevronRight, Package, GripVertical, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { useStore } from '@/lib/store';
+import { useStore, type CachedShoppingList, type CachedShoppingItem } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
@@ -27,23 +27,8 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-interface ShoppingItem {
-  id: string;
-  name: string;
-  genericName: string | null;
-  quantity: string | null;
-  section: string | null;
-  sectionOrder: number;
-  isChecked: boolean;
-  recipeId: string | null;
-}
-
-interface ShoppingList {
-  id: string;
-  name: string;
-  storeName: string | null;
-  items: ShoppingItem[];
-}
+type ShoppingItem = CachedShoppingItem;
+type ShoppingList = CachedShoppingList;
 
 // Basket item — items scanned/tapped while shopping, with editable fields.
 interface BasketItem {
@@ -96,8 +81,7 @@ function guessSection(name: string): { section: string; order: number } {
 }
 
 export function ShoppingListView() {
-  const { authToken } = useStore();
-  const [lists, setLists] = useState<ShoppingList[]>([]);
+  const { authToken, shoppingLists, setShoppingLists, fetchShoppingLists, fetchPantry } = useStore();
   const [loading, setLoading] = useState(true);
   const [activeListId, setActiveListId] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
@@ -114,29 +98,34 @@ export function ShoppingListView() {
 
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
-  const fetchLists = useCallback(async () => {
-    try {
-      const [listsRes, recurringRes] = await Promise.all([
-        fetch('/api/shopping-lists', { headers: authHeaders }),
-        fetch('/api/recurring', { headers: authHeaders }),
-      ]);
-      const listsData = await listsRes.json();
-      const recurringData = await recurringRes.json();
-      setLists(listsData.lists || []);
-      setRecurringItems(recurringData.items || []);
-      if (listsData.lists?.length > 0 && !activeListId) {
-        setActiveListId(listsData.lists[0].id);
-      }
-    } catch {
-      toast.error('Failed to load shopping lists.');
-    } finally {
-      setLoading(false);
-    }
-  }, [authToken, activeListId]);
+  // Use cached lists from the store. Fetch only if the store is empty.
+  const lists: ShoppingList[] = shoppingLists;
 
   useEffect(() => {
-    fetchLists();
-  }, [fetchLists]);
+    async function loadData() {
+      try {
+        if (shoppingLists.length === 0) {
+          await fetchShoppingLists();
+        }
+        // Always fetch recurring items (not cached in store).
+        const recurringRes = await fetch('/api/recurring', { headers: authHeaders });
+        const recurringData = await recurringRes.json();
+        setRecurringItems(recurringData.items || []);
+      } catch {
+        toast.error('Failed to load shopping lists.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [authToken, shoppingLists.length, fetchShoppingLists]);
+
+  // Set active list when lists load.
+  useEffect(() => {
+    if (lists.length > 0 && !activeListId) {
+      setActiveListId(lists[0].id);
+    }
+  }, [lists, activeListId]);
 
   const activeList = lists.find((l) => l.id === activeListId);
 
@@ -169,10 +158,10 @@ export function ShoppingListView() {
         // Re-fetch to get the items.
         const refetch = await fetch('/api/shopping-lists', { headers: authHeaders });
         const refetchData = await refetch.json();
-        setLists(refetchData.lists || []);
+        setShoppingLists(refetchData.lists || []);
         toast.success(`List created with ${recurringItems.length} recurring items.`);
       } else {
-        setLists([newList, ...lists]);
+        setShoppingLists([newList, ...lists]);
         toast.success('List created.');
       }
 
@@ -236,7 +225,7 @@ export function ShoppingListView() {
         body: JSON.stringify({ name: newItemName.trim() }),
       });
       const data = await res.json();
-      setLists(lists.map((l) => l.id === activeListId ? { ...l, items: [...l.items, ...data.items] } : l));
+      setShoppingLists(lists.map((l) => l.id === activeListId ? { ...l, items: [...l.items, ...data.items] } : l));
       setNewItemName('');
     } catch {
       toast.error('Could not add item.');
@@ -247,7 +236,7 @@ export function ShoppingListView() {
 
   async function toggleItem(item: ShoppingItem) {
     const newChecked = !item.isChecked;
-    setLists(lists.map((l) => l.id === activeListId ? {
+    setShoppingLists(lists.map((l) => l.id === activeListId ? {
       ...l,
       items: l.items.map((i) => i.id === item.id ? { ...i, isChecked: newChecked } : i),
     } : l));
@@ -267,7 +256,7 @@ export function ShoppingListView() {
   }
 
   async function deleteItem(itemId: string) {
-    setLists(lists.map((l) => l.id === activeListId ? { ...l, items: l.items.filter((i) => i.id !== itemId) } : l));
+    setShoppingLists(lists.map((l) => l.id === activeListId ? { ...l, items: l.items.filter((i) => i.id !== itemId) } : l));
     await fetch(`/api/shopping-items/${itemId}`, { method: 'DELETE', headers: authHeaders });
   }
 
@@ -275,7 +264,7 @@ export function ShoppingListView() {
     if (!activeListId) return;
     await fetch(`/api/shopping-lists/${activeListId}`, { method: 'DELETE', headers: authHeaders });
     const remaining = lists.filter((l) => l.id !== activeListId);
-    setLists(remaining);
+    setShoppingLists(remaining);
     setActiveListId(remaining[0]?.id || null);
     toast.success('List deleted.');
   }
@@ -430,7 +419,7 @@ export function ShoppingListView() {
 
       // Update local state — remove deleted items.
       if (itemsToRemove.length > 0 && activeListId) {
-        setLists(lists.map((l) => {
+        setShoppingLists(lists.map((l) => {
           if (l.id !== activeListId) return l;
           const removedIds = new Set(itemsToRemove.map((i) => i.id));
           return { ...l, items: l.items.filter((i) => !removedIds.has(i.id)) };
@@ -439,6 +428,9 @@ export function ShoppingListView() {
 
       toast.success(`${basket.length} items added to pantry!${itemsToRemove.length > 0 ? ` ${itemsToRemove.length} items removed from shopping list.` : ''}`);
       setBasket([]);
+
+      // Refresh the pantry cache so the new items show up immediately.
+      fetchPantry();
     } catch {
       toast.error('Could not add some items to pantry.');
     } finally {

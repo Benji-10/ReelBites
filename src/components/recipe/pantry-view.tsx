@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,8 +80,7 @@ function extractUnit(qty: string): string {
 }
 
 export function PantryView() {
-  const { authToken } = useStore();
-  const [items, setItems] = useState<PantryItem[]>([]);
+  const { authToken, pantryItems, fetchPantry, addPantryItem, updatePantryItem, removePantryItem } = useStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
@@ -103,21 +102,16 @@ export function PantryView() {
 
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
-  const fetchItems = useCallback(async () => {
-    try {
-      const res = await fetch('/api/pantry', { headers: authHeaders });
-      const data = await res.json();
-      setItems(data.items || []);
-    } catch {
-      toast.error('Failed to load pantry.');
-    } finally {
-      setLoading(false);
-    }
-  }, [authToken]);
+  // Use cached items from the store. Fetch only if the store is empty.
+  const items: PantryItem[] = pantryItems as PantryItem[];
 
   useEffect(() => {
-    fetchItems();
-  }, [fetchItems]);
+    if (pantryItems.length === 0) {
+      fetchPantry().finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, [pantryItems.length, fetchPantry]);
 
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
@@ -138,7 +132,7 @@ export function PantryView() {
       });
       if (!res.ok) throw new Error('Failed to add.');
       const data = await res.json();
-      setItems([...items, data.item]);
+      addPantryItem(data.item);
       setNewName(''); setNewQuantity(''); setNewExpiry(''); setNewCategory(''); setBarcodeValue('');
       setShowAdd(false);
       toast.success('Added to pantry.');
@@ -241,7 +235,11 @@ export function PantryView() {
   }
 
   async function updateItem(id: string, updates: Record<string, unknown>) {
-    setItems(items.map((i) => (i.id === id ? { ...i, ...updates } as PantryItem : i)));
+    // Optimistic update via the store.
+    const existing = pantryItems.find((i) => i.id === id);
+    if (existing) {
+      updatePantryItem({ ...existing, ...updates } as PantryItem);
+    }
     if (selectedItem) setSelectedItem({ ...selectedItem, ...updates } as PantryItem);
     await fetch(`/api/pantry/${id}`, {
       method: 'PUT',
@@ -251,7 +249,7 @@ export function PantryView() {
   }
 
   async function deleteItem(id: string) {
-    setItems(items.filter((i) => i.id !== id));
+    removePantryItem(id);
     setSelectedItem(null);
     setShowDeleteConfirm(false);
     await fetch(`/api/pantry/${id}`, { method: 'DELETE', headers: authHeaders });

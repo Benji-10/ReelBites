@@ -3,7 +3,9 @@
  *
  * Manages:
  *   - Current view (extract, box, detail)
- *   - Saved recipes list
+ *   - Saved recipes list (cached for route switching)
+ *   - Pantry items (cached for route switching)
+ *   - Shopping lists + items (cached for route switching)
  *   - Current extraction state (URL, progress, result, error)
  *   - Auth token (for API calls)
  */
@@ -22,6 +24,36 @@ export interface ExtractionState {
   logs: Array<{ step: string; message: string; progress: number; timestamp: number }>;
 }
 
+export interface CachedPantryItem {
+  id: string;
+  name: string;
+  genericName: string | null;
+  category: string | null;
+  quantity: string | null;
+  expiryDate: string | null;
+  barcode: string | null;
+  isRunningLow: boolean;
+  fillPercent?: number;
+}
+
+export interface CachedShoppingItem {
+  id: string;
+  name: string;
+  genericName: string | null;
+  quantity: string | null;
+  section: string | null;
+  sectionOrder: number;
+  isChecked: boolean;
+  recipeId: string | null;
+}
+
+export interface CachedShoppingList {
+  id: string;
+  name: string;
+  storeName: string | null;
+  items: CachedShoppingItem[];
+}
+
 interface AppState {
   // Navigation
   view: AppView;
@@ -31,13 +63,26 @@ interface AppState {
   authToken: string | null;
   setAuthToken: (token: string | null) => void;
 
-  // Recipes
+  // Recipes (cached)
   recipes: SavedRecipe[];
   setRecipes: (recipes: SavedRecipe[]) => void;
   addRecipe: (recipe: SavedRecipe) => void;
   updateRecipe: (recipe: SavedRecipe) => void;
   removeRecipe: (id: string) => void;
   fetchRecipes: () => Promise<void>;
+
+  // Pantry (cached for route switching)
+  pantryItems: CachedPantryItem[];
+  setPantryItems: (items: CachedPantryItem[]) => void;
+  addPantryItem: (item: CachedPantryItem) => void;
+  updatePantryItem: (item: CachedPantryItem) => void;
+  removePantryItem: (id: string) => void;
+  fetchPantry: () => Promise<void>;
+
+  // Shopping lists (cached for route switching)
+  shoppingLists: CachedShoppingList[];
+  setShoppingLists: (lists: CachedShoppingList[]) => void;
+  fetchShoppingLists: () => Promise<void>;
 
   // Extraction
   extraction: ExtractionState;
@@ -64,6 +109,7 @@ export const useStore = create<AppState>((set, get) => ({
   authToken: null,
   setAuthToken: (token) => set({ authToken: token }),
 
+  // ---- Recipes ----
   recipes: [],
   setRecipes: (recipes) => set({ recipes }),
   addRecipe: (recipe) =>
@@ -74,7 +120,6 @@ export const useStore = create<AppState>((set, get) => ({
     })),
   removeRecipe: (id) =>
     set((state) => ({ recipes: state.recipes.filter((r) => r.id !== id) })),
-
   fetchRecipes: async () => {
     const { authToken } = get();
     try {
@@ -90,6 +135,51 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  // ---- Pantry (cached) ----
+  pantryItems: [],
+  setPantryItems: (items) => set({ pantryItems: items }),
+  addPantryItem: (item) =>
+    set((state) => ({ pantryItems: [...state.pantryItems, item] })),
+  updatePantryItem: (item) =>
+    set((state) => ({
+      pantryItems: state.pantryItems.map((p) => (p.id === item.id ? item : p)),
+    })),
+  removePantryItem: (id) =>
+    set((state) => ({ pantryItems: state.pantryItems.filter((p) => p.id !== id) })),
+  fetchPantry: async () => {
+    const { authToken } = get();
+    try {
+      const response = await fetch('/api/pantry', {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      });
+      const data = await response.json();
+      if (data.items) {
+        set({ pantryItems: data.items as CachedPantryItem[] });
+      }
+    } catch (err) {
+      console.error('Failed to fetch pantry:', err);
+    }
+  },
+
+  // ---- Shopping lists (cached) ----
+  shoppingLists: [],
+  setShoppingLists: (lists) => set({ shoppingLists: lists }),
+  fetchShoppingLists: async () => {
+    const { authToken } = get();
+    try {
+      const response = await fetch('/api/shopping-lists', {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      });
+      const data = await response.json();
+      if (data.lists) {
+        set({ shoppingLists: data.lists as CachedShoppingList[] });
+      }
+    } catch (err) {
+      console.error('Failed to fetch shopping lists:', err);
+    }
+  },
+
+  // ---- Extraction ----
   extraction: initialExtraction,
   startExtraction: (url) =>
     set({
