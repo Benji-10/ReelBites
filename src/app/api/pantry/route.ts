@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { canonicalizeName } from '@/lib/canonicalize';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,7 +35,13 @@ async function categorizeWithAI(name: string): Promise<{ category: string; gener
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { category: 'Other', genericName: name.toLowerCase() };
 
+  // Use the shared canonicalization function for the generic name.
+  // This ensures pantry items and recipe ingredients speak the same language.
+  const genericName = await canonicalizeName(name);
+
+  // Category is still done separately (it's a different concern).
   try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
@@ -43,38 +49,20 @@ async function categorizeWithAI(name: string): Promise<{ category: string; gener
     });
 
     const result = await model.generateContent(
-      `Categorize this food product. Return JSON with "category" (one of: ${FOOD_CATEGORIES.join(', ')}) and "genericName" (a normalized lowercase name for matching against recipe ingredients).
-
-IMPORTANT RULES for genericName:
-- PRESERVE the cut/type of meat: "chicken breast" NOT "chicken", "chicken thigh" NOT "chicken", "beef sirloin" NOT "beef"
-- PRESERVE the form: "garlic powder" NOT "garlic", "grated parmesan" NOT "parmesan", "crushed tomatoes" NOT "tomatoes"
-- PRESERVE the variety: "spaghetti" NOT "pasta", "baby spinach" NOT "spinach", "red onion" NOT "onion"
-- STRIP brand names, store names, and marketing words: "Tesco", "Organic", "Premium", "Fresh", "Natural"
-- STRIP quantities and percentages: "500g", "95%", "2-pack"
-- STRIP quality descriptors: "finest", "best", "value"
-- Map regional synonyms to the more common name: "capsicum" → "bell pepper", "aubergine" → "eggplant", "courgette" → "zucchini", "minced beef" → "ground beef", "spring onion" → "scallion"
-
-Examples:
-- "Chicken Breast Tenders - Fresh Natural" → "chicken breast"
-- "Tesco Spaghetti 500g" → "spaghetti"
-- "Organic Crushed Red Pepper" → "red pepper flakes"
-- "Whole Milk 2L" → "whole milk"
-- "Lean Ground Beef 95%" → "ground beef"
-- "Fresh Basil Bunch" → "fresh basil"
-- "Red Capsicum" → "red bell pepper"
+      `Categorize this food product into one of these categories: ${FOOD_CATEGORIES.join(', ')}
 
 Product: "${name}"
 
-Return ONLY: {"category": "...", "genericName": "..."}`,
+Return ONLY: {"category": "..."}`,
     );
 
     const parsed = JSON.parse(result.response.text());
     return {
       category: parsed.category || 'Other',
-      genericName: (parsed.genericName || name).toLowerCase(),
+      genericName,
     };
   } catch {
-    return { category: 'Other', genericName: name.toLowerCase() };
+    return { category: 'Other', genericName };
   }
 }
 

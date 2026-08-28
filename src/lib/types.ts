@@ -42,6 +42,7 @@ export interface RecipeIngredient {
   notes?: string | null;
   evidence?: string | null;
   flag?: string | null;
+  canonicalName?: string | null; // Gemini-canonicalized name for pantry matching (lazy-populated)
 }
 
 export interface RecipeInstruction {
