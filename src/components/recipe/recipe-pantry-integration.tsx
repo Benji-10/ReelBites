@@ -66,31 +66,110 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
     loadData();
   }, [authToken]);
 
-  // Match recipe ingredients against pantry items using genericName.
+  // Common ingredients that everyone has — don't show as "missing".
+  const PANTRY_STAPLES = [
+    'water', 'salt', 'pepper', 'black pepper', 'white pepper',
+    'oil', 'olive oil', 'vegetable oil', 'sunflower oil',
+    'sugar', 'flour',
+  ];
+
+  // Normalize a name for matching: lowercase, remove plurals, remove extra words.
+  function normalizeName(name: string): string {
+    let n = name.toLowerCase().trim();
+    // Remove common qualifiers.
+    n = n.replace(/\b(fresh|dried|ground|whole|chopped|sliced|diced|minced|grated|peeled|raw|cooked|lean|extra|fine|coarse)\b/g, '');
+    // Remove percentages like "95%".
+    n = n.replace(/\d+%/g, '');
+    // Remove parenthetical notes.
+    n = n.replace(/\([^)]*\)/g, '');
+    // Normalize whitespace.
+    n = n.replace(/\s+/g, ' ').trim();
+    // Simple plural → singular (handles most food words).
+    if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
+    else if (n.endsWith('ses')) n = n.slice(0, -2);
+    else if (n.endsWith('s') && !n.endsWith('ss')) n = n.slice(0, -1);
+    return n.trim();
+  }
+
+  // Check if two ingredient names are a real match (not a false positive).
+  function isIngredientMatch(recipeName: string, pantryName: string, pantryGeneric: string): boolean {
+    const rNorm = normalizeName(recipeName);
+    const pNorm = normalizeName(pantryName);
+    const gNorm = normalizeName(pantryGeneric || '');
+
+    // Exact match (after normalization).
+    if (rNorm === pNorm || rNorm === gNorm) return true;
+
+    // Word-level matching: split into words and check if the core word matches.
+    // "crushed red pepper" → core word "pepper"
+    // "black pepper" → core word "pepper" → match
+    // "pepper" → "pepper" → match
+    // But "red pepper" vs "black pepper" should still match since both are "pepper"
+    // However "pepper" vs "bell pepper" should NOT match (different ingredient).
+    // We use the LAST word as the "type" word for matching.
+    const rWords = rNorm.split(' ').filter((w) => w.length > 2);
+    const pWords = pNorm.split(' ').filter((w) => w.length > 2);
+    const gWords = gNorm.split(' ').filter((w) => w.length > 2);
+
+    // If one is a single word and the other is multi-word, check if the
+    // single word equals the last word of the multi-word name.
+    if (rWords.length === 1 && pWords.length > 1) {
+      return rWords[0] === pWords[pWords.length - 1];
+    }
+    if (pWords.length === 1 && rWords.length > 1) {
+      return pWords[0] === rWords[rWords.length - 1];
+    }
+    if (rWords.length === 1 && gWords.length > 1) {
+      return rWords[0] === gWords[gWords.length - 1];
+    }
+    if (gWords.length === 1 && rWords.length > 1) {
+      return gWords[0] === rWords[rWords.length - 1];
+    }
+
+    // For multi-word names, check if one fully contains the other's core words.
+    if (rWords.length > 1 && pWords.length > 1) {
+      const rCore = rWords[rWords.length - 1];
+      const pCore = pWords[pWords.length - 1];
+      // Only match if the "type" word matches AND at least one other word matches.
+      if (rCore === pCore) {
+        const rSet = new Set(rWords);
+        const pSet = new Set(pWords);
+        const overlap = [...rSet].filter((w) => pSet.has(w));
+        return overlap.length >= 1;
+      }
+    }
+
+    return false;
+  }
+
+  // Match recipe ingredients against pantry items using improved matching.
   const ingredientStatus = (recipe.ingredients || []).map((ing, idx) => {
     const ingNameLower = ing.name.toLowerCase().trim();
-    // Check if any pantry item matches by name or genericName.
+    const isStaple = PANTRY_STAPLES.some((s) => ingNameLower === s || ingNameLower.startsWith(s + ' '));
+
+    // If it's a staple, always show as "have".
+    if (isStaple) {
+      return { idx, ingredient: ing, inPantry: true, pantryItem: null, isStaple: true };
+    }
+
+    // Check if any pantry item matches.
     const match = pantryItems.find((p) => {
-      const pName = p.name.toLowerCase().trim();
-      const pGeneric = (p.genericName || '').toLowerCase().trim();
-      return pName === ingNameLower ||
-        pGeneric === ingNameLower ||
-        pName.includes(ingNameLower) ||
-        ingNameLower.includes(pName) ||
-        pGeneric.includes(ingNameLower) ||
-        ingNameLower.includes(pGeneric);
+      return isIngredientMatch(ing.name, p.name, p.genericName || '');
     });
     return {
       idx,
       ingredient: ing,
       inPantry: !!match,
       pantryItem: match,
+      isStaple: false,
     };
   });
 
   const haveCount = ingredientStatus.filter((s) => s.inPantry).length;
-  const missingCount = ingredientStatus.length - haveCount;
-  const missingIngredients = ingredientStatus.filter((s) => !s.inPantry).map((s) => s.ingredient);
+  const missingIngredients = ingredientStatus
+    .filter((s) => !s.inPantry && !s.isStaple)
+    .map((s) => s.ingredient);
+  const missingCount = missingIngredients.length;
 
   async function addMissingToShoppingList() {
     if (!selectedListId || missingIngredients.length === 0) return;

@@ -62,12 +62,28 @@ interface RecurringItem {
   quantity: string | null;
 }
 
+// Normalize a name for matching: lowercase, remove plurals, qualifiers, brand names.
+function normalizeForMatch(name: string): string {
+  let n = name.toLowerCase().trim();
+  // Remove common brand names and qualifiers.
+  n = n.replace(/\b(kewpie|heinz|napolina|barilla|nestle|knorr|mccormick|hellmann|lea&perrins|tabasco|soy sauce|kikkoman)\b/g, '');
+  // Remove qualifiers.
+  n = n.replace(/\b(fresh|dried|ground|whole|chopped|sliced|diced|minced|grated|peeled|raw|cooked|lean|extra|fine|coarse|minute|instant)\b/g, '');
+  // Remove percentages.
+  n = n.replace(/\d+%/g, '');
+  // Remove parenthetical notes.
+  n = n.replace(/\([^)]*\)/g, '');
+  // Normalize whitespace.
+  n = n.replace(/\s+/g, ' ').trim();
+  // Plural → singular.
+  if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
+  else if (n.endsWith('ses')) n = n.slice(0, -2);
+  else if (n.endsWith('s') && !n.endsWith('ss')) n = n.slice(0, -1);
+  return n.trim();
+}
+
 function guessSection(name: string): { section: string; order: number } {
   const lower = name.toLowerCase();
-  if (/tomato|onion|garlic|lettuce|potato|carrot|pepper|herb|fruit|veg|lemon|lime|avocado|ginger/.test(lower))
-    return { section: 'Produce', order: 1 };
-  if (/bread|bagel|croissant|bun/.test(lower)) return { section: 'Bakery', order: 2 };
-  if (/milk|cheese|yogurt|cream|butter|egg/.test(lower)) return { section: 'Dairy', order: 3 };
   if (/chicken|beef|pork|fish|salmon|shrimp|bacon|sausage/.test(lower)) return { section: 'Meat & Fish', order: 4 };
   if (/pasta|spaghetti|penne|rice|noodle|flour|oat|grain|quinoa/.test(lower)) return { section: 'Grains & Pasta', order: 6 };
   if (/sauce|ketchup|mayo|mustard|vinegar|oil|soy/.test(lower)) return { section: 'Sauces & Condiments', order: 7 };
@@ -320,9 +336,13 @@ export function ShoppingListView() {
         const quantity = p.quantity || '';
 
         // Check if this matches any item on the shopping list.
+        // Uses normalized matching (handles plurals, brand names, etc.)
+        const scannedNorm = normalizeForMatch(name);
         const matchingItem = activeList?.items.find((i) => {
-          const iName = (i.genericName || i.name).toLowerCase();
-          return name.toLowerCase().includes(iName) || iName.includes(name.toLowerCase());
+          const itemNorm = normalizeForMatch(i.genericName || i.name);
+          return scannedNorm === itemNorm ||
+            (scannedNorm.length > 3 && itemNorm.length > 3 &&
+             (scannedNorm.includes(itemNorm) || itemNorm.includes(scannedNorm)));
         });
 
         if (matchingItem && !matchingItem.isChecked) {
@@ -389,10 +409,12 @@ export function ShoppingListView() {
 
         // Find matching shopping list items to remove.
         if (activeList) {
+          const basketNorm = normalizeForMatch(item.genericName || item.name);
           const matched = activeList.items.filter((si) => {
-            const siName = (si.genericName || si.name).toLowerCase();
-            const basketName = (item.genericName || item.name).toLowerCase();
-            return siName === basketName || siName.includes(basketName) || basketName.includes(siName);
+            const siNorm = normalizeForMatch(si.genericName || si.name);
+            return siNorm === basketNorm ||
+              (siNorm.length > 3 && basketNorm.length > 3 &&
+               (siNorm.includes(basketNorm) || basketNorm.includes(siNorm)));
           });
           itemsToRemove.push(...matched);
         }

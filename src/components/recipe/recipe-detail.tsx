@@ -84,13 +84,8 @@ export function RecipeDetail() {
     if (!recipeId) return;
     setLoading(true);
 
-    // Try to find in the store (may need a tick for the store to update).
+    // Try to find in the store first (instant if available).
     let fromStore = recipes.find((r) => r.id === recipeId);
-    if (!fromStore) {
-      // Wait 200ms and retry (handles race condition right after addRecipe).
-      await new Promise((r) => setTimeout(r, 200));
-      fromStore = recipes.find((r) => r.id === recipeId);
-    }
     if (fromStore) {
       setRecipe(fromStore);
       setEditTitle(fromStore.title);
@@ -109,23 +104,52 @@ export function RecipeDetail() {
       return;
     }
 
+    // Fetch from API. Use a small delay to let the auth token settle
+    // after navigation (prevents the 404 → retry race condition).
+    await new Promise((r) => setTimeout(r, 300));
+
     try {
       const response = await fetch(`/api/recipes/${recipeId}`, {
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       });
-      if (!response.ok) throw new Error('Failed to load recipe.');
-      const data = await response.json();
-      if (data.recipe) {
-        setRecipe(data.recipe);
-        setEditTitle(data.recipe.title);
-        setEditDescription(data.recipe.description || '');
-        setEditIngredients([...(data.recipe.ingredients || [])]);
-        setEditInstructions([...(data.recipe.instructions || [])]);
-        setEditMetadata([...(data.recipe.metadata || [])]);
-        setEditSourceUrl(data.recipe.sourceUrl || '');
+      if (!response.ok) {
+        // If 404, retry once after a longer delay (token may still be loading).
+        if (response.status === 404) {
+          await new Promise((r) => setTimeout(r, 500));
+          const retry = await fetch(`/api/recipes/${recipeId}`, {
+            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+          });
+          if (!retry.ok) throw new Error('Failed to load recipe.');
+          const retryData = await retry.json();
+          if (retryData.recipe) {
+            setRecipe(retryData.recipe);
+            setEditTitle(retryData.recipe.title);
+            setEditDescription(retryData.recipe.description || '');
+            setEditIngredients([...(retryData.recipe.ingredients || [])]);
+            setEditInstructions([...(retryData.recipe.instructions || [])]);
+            setEditMetadata([...(retryData.recipe.metadata || [])]);
+            setEditSourceUrl(retryData.recipe.sourceUrl || '');
+          }
+        } else {
+          throw new Error('Failed to load recipe.');
+        }
+      } else {
+        const data = await response.json();
+        if (data.recipe) {
+          setRecipe(data.recipe);
+          setEditTitle(data.recipe.title);
+          setEditDescription(data.recipe.description || '');
+          setEditIngredients([...(data.recipe.ingredients || [])]);
+          setEditInstructions([...(data.recipe.instructions || [])]);
+          setEditMetadata([...(data.recipe.metadata || [])]);
+          setEditSourceUrl(data.recipe.sourceUrl || '');
+        }
       }
     } catch (err) {
-      toast.error('Could not load recipe: ' + (err as Error).message);
+      // Only show error toast if we still don't have a recipe.
+      if (!recipe) {
+        toast.error('Could not load recipe: ' + (err as Error).message);
+      }
     } finally {
       setLoading(false);
     }

@@ -66,7 +66,7 @@ ${knownInfo}
 Today's date: ${todayStr}
 
 Estimate:
-1. "genericName": A normalized lowercase name for pantry lookups (e.g. "Napolina Chopped Tomatoes" → "chopped tomatoes", "Heinz Baked Beans" → "baked beans")
+1. "genericName": A normalized lowercase name for pantry lookups. This should be the GENERIC product type, NOT the brand name. Examples: "Kewpie" → "mayonnaise", "Napolina Chopped Tomatoes" → "chopped tomatoes", "Heinz Baked Beans" → "baked beans", "Barilla Spaghetti" → "pasta", "Minute Rice" → "rice", "Lean Beef Mince 95%" → "beef mince". Remove brand names, percentages, and packaging info.
 2. "category": A food category from this list: Produce, Dairy, Meat & Fish, Bakery, Pantry, Grains, Pasta, Sauces, Spices, Canned Goods, Frozen, Snacks, Beverages, Condiments, Oils & Vinegars, Baking, Other
 3. "quantity": If not already known, estimate the typical package size (e.g. "400g", "1L", "6 pack", "500ml"). Only fill if the quantity is empty.
 4. "expiryDate": Estimate a reasonable expiry date (YYYY-MM-DD format). For fresh produce: 5-7 days from today. For dairy: 7-14 days. For canned goods: 1-2 years. For pasta/rice: 1 year. For frozen: 3-6 months. For spices: 1 year. For bread: 3-5 days.
