@@ -79,8 +79,10 @@ model PantryItem {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   name          String
-  genericName   String?  // Normalized name for lookups (e.g. "pasta", "milk")
-  category      String?  // e.g. "pasta", "vegetables", "grains", "sauces", "dairy"
+  genericName   String?  // Canonical name from Gemini (e.g. "bell pepper", "chicken breast")
+  canonicalAncestors  Json?  // Array of ancestor concepts, e.g. ["wheat noodles", "noodles"]
+  canonicalAttributes Json?  // Object of attributes, e.g. {"color": "red", "state": "dry"}
+  category      String?  // e.g. "Produce", "Dairy", "Meat & Fish"
   quantity      String?  // e.g. "2", "500g", "1 box"
   expiryDate    DateTime?
   barcode       String?

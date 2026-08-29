@@ -42,7 +42,9 @@ export interface RecipeIngredient {
   notes?: string | null;
   evidence?: string | null;
   flag?: string | null;
-  canonicalName?: string | null; // Gemini-canonicalized name for pantry matching (lazy-populated)
+  canonicalName?: string | null;       // Gemini canonical_name (e.g. "bell pepper")
+  canonicalAncestors?: string[] | null; // Ancestor concepts (e.g. ["chicken"])
+  canonicalAttributes?: Record<string, string> | null; // Attributes (e.g. {"color": "red"})
 }
 
 export interface RecipeInstruction {

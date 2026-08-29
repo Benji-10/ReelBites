@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
-import { canonicalizeName } from '@/lib/canonicalize';
+import { canonicalizeName, type CanonicalIngredient } from '@/lib/canonicalize';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,15 +31,22 @@ const FOOD_CATEGORIES = [
   'Condiments', 'Oils & Vinegars', 'Baking', 'Other',
 ];
 
-async function categorizeWithAI(name: string): Promise<{ category: string; genericName: string }> {
+async function categorizeAndCanonicalize(name: string): Promise<{
+  category: string;
+  canonical: CanonicalIngredient;
+}> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return { category: 'Other', genericName: name.toLowerCase() };
+  if (!apiKey) {
+    return {
+      category: 'Other',
+      canonical: { canonical_name: name.toLowerCase(), ancestors: [], attributes: {} },
+    };
+  }
 
-  // Use the shared canonicalization function for the generic name.
-  // This ensures pantry items and recipe ingredients speak the same language.
-  const genericName = await canonicalizeName(name);
+  // Get the full canonical structure (canonical_name + ancestors + attributes).
+  const canonical = await canonicalizeName(name);
 
-  // Category is still done separately (it's a different concern).
+  // Category is done separately (different concern).
   try {
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(apiKey);
@@ -59,10 +66,10 @@ Return ONLY: {"category": "..."}`,
     const parsed = JSON.parse(result.response.text());
     return {
       category: parsed.category || 'Other',
-      genericName,
+      canonical,
     };
   } catch {
-    return { category: 'Other', genericName };
+    return { category: 'Other', canonical };
   }
 }
 
@@ -125,14 +132,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing "name".' }, { status: 400 });
   }
 
-  // Auto-categorize if not provided.
+  // Auto-categorize and canonicalize if not provided.
   let category = body.category;
   let genericName = body.genericName;
+  let canonicalAncestors: string[] | null = null;
+  let canonicalAttributes: Record<string, string> | null = null;
 
   if (!genericName) {
-    const ai = await categorizeWithAI(body.name);
+    const ai = await categorizeAndCanonicalize(body.name);
     if (!category) category = ai.category;
-    if (!genericName) genericName = ai.genericName;
+    genericName = ai.canonical.canonical_name;
+    canonicalAncestors = ai.canonical.ancestors.length > 0 ? ai.canonical.ancestors : null;
+    canonicalAttributes = Object.keys(ai.canonical.attributes).length > 0 ? ai.canonical.attributes : null;
   }
 
   // Learn category overrides: check if the user has previously set a custom
@@ -150,6 +161,8 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         name: body.name,
         genericName,
+        canonicalAncestors: canonicalAncestors as never,
+        canonicalAttributes: canonicalAttributes as never,
         category,
         quantity: body.quantity || null,
         expiryDate: body.expiryDate ? new Date(body.expiryDate) : null,

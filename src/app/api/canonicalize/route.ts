@@ -2,17 +2,17 @@
  * POST /api/canonicalize
  *
  * Batch-canonicalize ingredient names using Gemini.
- * Used by the recipe-pantry-integration to canonicalize recipe ingredients
- * so they can be matched against pantry items.
+ * Returns the full semantic structure (canonical_name, ancestors, attributes)
+ * for each input name.
  *
  * Request:  { "names": ["Chicken Breast Tenders", "Red Capsicum", ...] }
- * Response: { "canonical": { "Chicken Breast Tenders": "chicken breast", "Red Capsicum": "red bell pepper", ... } }
+ * Response: { "canonical": { "Chicken Breast Tenders": { "canonical_name": "chicken breast", "ancestors": ["chicken"], "attributes": {} }, ... } }
  *
  * No auth required — canonicalization doesn't expose user data.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { canonicalizeNames } from '@/lib/canonicalize';
+import { canonicalizeNames, type CanonicalIngredient } from '@/lib/canonicalize';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,13 +31,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing "names" array.' }, { status: 400 });
   }
 
-  // Deduplicate names to reduce API cost.
   const uniqueNames = Array.from(new Set(body.names.filter((n) => n && typeof n === 'string')));
 
   const canonicalMap = await canonicalizeNames(uniqueNames);
 
-  // Convert Map to plain object for JSON response.
-  const canonical: Record<string, string> = {};
+  const canonical: Record<string, CanonicalIngredient> = {};
   for (const [original, canon] of canonicalMap) {
     canonical[original] = canon;
   }

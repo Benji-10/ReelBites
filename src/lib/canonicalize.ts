@@ -1,127 +1,189 @@
 /**
  * Shared ingredient canonicalization using Gemini.
  *
- * This is the SINGLE SOURCE OF TRUTH for canonical ingredient names.
- * Both the pantry (when adding items) and the recipe (when checking pantry)
- * use this same function, so they speak the same "language".
+ * Produces a hierarchical semantic representation:
+ *   - canonical_name: the most specific meaningful grocery concept
+ *   - ancestors: progressively broader concepts (immediate parent → broadest)
+ *   - attributes: meaningful properties (state, form, color, variety, etc.)
  *
- * The goal: "capsicum" → "bell pepper", "italian herbs" → "italian seasoning",
- * "chicken breast tenders" → "chicken breast" — consistently, every time.
+ * This allows directional matching:
+ *   - Recipe needs "noodles" → pantry has "udon" → MATCH (udon's ancestors include noodles)
+ *   - Recipe needs "udon" → pantry has "noodles" → NO MATCH (can't walk downward)
  *
- * Once both sides have canonical names, matching is trivial: just compare
- * canonical names (with prefix matching for specificity).
+ * Both pantry items and recipe ingredients use this same function,
+ * so they speak the same semantic language.
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-/**
- * The canonicalization prompt. This is deliberately detailed and includes
- * many examples to ensure consistent output across different inputs.
- *
- * Key principles:
- * - PRESERVE the cut/type of meat (chicken breast ≠ chicken thigh)
- * - PRESERVE the form (garlic powder ≠ garlic clove)
- * - PRESERVE the variety (red onion ≠ white onion)
- * - MAP regional synonyms to a single canonical form
- * - STRIP brand names, quantities, marketing words
- */
-const CANONICALIZATION_PROMPT = `You are an ingredient canonicalizer. Your job is to convert ingredient names into a consistent canonical form so that the same ingredient always gets the same name, regardless of how it was originally worded.
+export interface CanonicalIngredient {
+  canonical_name: string;
+  ancestors: string[];
+  attributes: Record<string, string>;
+}
 
-CANONICALIZATION RULES (in priority order):
+const CANONICALIZATION_PROMPT = `You are a Grocery Semantic Normalizer.
 
-1. PRESERVE the cut/type of meat and fish:
-   - "chicken breast tenders" → "chicken breast" (NOT "chicken")
-   - "chicken thigh fillets" → "chicken thigh" (NOT "chicken")
-   - "beef sirloin steak" → "beef sirloin" (NOT "beef")
-   - "salmon fillet" → "salmon fillet" (NOT "salmon" — a fillet is different from a whole salmon)
-   - "ground beef 95% lean" → "ground beef" (the cut/type, not the leanness)
+You convert grocery items into stable semantic representations for offline matching.
 
-2. PRESERVE the form/processing:
-   - "garlic granules" → "garlic granules" (NOT "garlic")
-   - "garlic powder" → "garlic powder" (NOT "garlic" — powder ≠ granules ≠ fresh)
-   - "grated parmesan" → "parmesan" (grated is just a prep state, not a different product)
-   - "crushed tomatoes" → "crushed tomatoes" (NOT "tomatoes")
-   - "tomato paste" → "tomato paste" (NOT "tomatoes")
-   - "sun-dried tomatoes" → "sun-dried tomatoes" (NOT "tomatoes")
+For each input item, return a JSON object with this structure:
+{
+  "original": "<the input string>",
+  "canonical_name": "<most specific meaningful grocery concept>",
+  "ancestors": ["<immediate parent concept>", "<broader concept>", ...],
+  "attributes": {}
+}
 
-3. PRESERVE the variety/color:
-   - "red bell pepper" → "red bell pepper" (NOT "bell pepper" — color matters in cooking)
-   - "red onion" → "red onion" (NOT "onion")
-   - "sweet onion" → "sweet onion" (NOT "onion")
-   - "baby spinach" → "baby spinach" (NOT "spinach" — baby spinach is different from regular)
-   - "whole milk" → "whole milk" (NOT "milk" — fat content matters)
+Return a JSON ARRAY of these objects, one per input item. No explanations, no markdown.
 
-4. MAP regional synonyms to a SINGLE canonical form. Always use the more internationally common term:
-   - "capsicum" / "sweet pepper" → "bell pepper"
-   - "red capsicum" → "red bell pepper"
-   - "aubergine" → "eggplant"
-   - "courgette" → "zucchini"
-   - "spring onion" / "green onion" → "scallion"
-   - "rocket" / "ruccola" → "arugula"
-   - "beetroot" → "beet"
-   - "swede" → "rutabaga"
-   - "minced beef" / "beef mince" → "ground beef"
-   - "minced pork" / "pork mince" → "ground pork"
-   - "coriander leaf" / "coriander leaves" / "fresh coriander" → "cilantro"
-   - "prawn" / "prawns" → "shrimp"
-   - "chilli flakes" / "chili flakes" / "chili flake" / "crushed red pepper" / "crushed red pepper flakes" → "red pepper flakes"
-   - "italian herbs" / "italian seasoning" / "mixed herbs" → "italian seasoning"
-   - "chilli powder" / "chile powder" → "chili powder"
-   - "heavy cream" / "whipping cream" → "double cream"
-   - "light cream" / "half and half" → "single cream"
-   - "powdered sugar" / "confectioners sugar" → "icing sugar"
-   - "caster sugar" / "superfine sugar" → "castor sugar"
-   - "plain flour" → "all-purpose flour"
-   - "self-raising flour" / "self-rising flour" → "self-raising flour"
+## Core principle
 
-5. STRIP these (they are NOT part of the ingredient identity):
-   - Brand names: "Tesco", "Heinz", "Barilla", "Kewpie", "Knorr", etc.
-   - Store names: "Waitrose", "Sainsbury's", etc.
-   - Marketing words: "Organic", "Premium", "Finest", "Best", "Value", "Natural"
-   - Quality descriptors: "fresh", "frozen", "raw", "cooked" (unless they define a different product)
-   - Quantities: "500g", "2L", "1kg", "2-pack"
-   - Percentages: "95%", "80%"
-   - Prep instructions in parentheses: "garlic (minced)" → "garlic"
+Identify WHAT the grocery item is, not what words it uses.
 
-6. STRIP "or" alternatives — keep only the FIRST option:
-   - "garlic granules or powder" → "garlic granules"
-   - "vegetable oil or olive oil" → "vegetable oil"
+Normalize across languages, dialects, synonyms, spelling, singular/plural, abbreviations, brands, and regional terminology.
 
-OUTPUT FORMAT:
-Return a JSON array. Each element has "original" (the input name) and "canonical" (the canonical name, lowercase, singular).
-Return ONLY the JSON array, no markdown, no explanation.
+Equivalent descriptions MUST independently produce the same representation.
 
-EXAMPLES:
-Input: ["Chicken Breast Tenders - Fresh Natural", "Tesco Spaghetti 500g", "Red Capsicum", "Crushed Red Pepper", "Italian Herbs", "Garlic Granules or Powder", "Olive Oil", "Light Cream Cheese", "Whole Milk 2L", "Spring Onion", "Minced Beef 500g"]
-Output: [
-  {"original": "Chicken Breast Tenders - Fresh Natural", "canonical": "chicken breast"},
-  {"original": "Tesco Spaghetti 500g", "canonical": "spaghetti"},
-  {"original": "Red Capsicum", "canonical": "red bell pepper"},
-  {"original": "Crushed Red Pepper", "canonical": "red pepper flakes"},
-  {"original": "Italian Herbs", "canonical": "italian seasoning"},
-  {"original": "Garlic Granules or Powder", "canonical": "garlic granules"},
-  {"original": "Olive Oil", "canonical": "olive oil"},
-  {"original": "Light Cream Cheese", "canonical": "light cream cheese"},
-  {"original": "Whole Milk 2L", "canonical": "whole milk"},
-  {"original": "Spring Onion", "canonical": "scallion"},
-  {"original": "Minced Beef 500g", "canonical": "ground beef"}
-]`;
+Use stable, lowercase US-English concept names.
+
+## Hierarchy
+
+canonical_name is the item's most specific meaningful grocery concept.
+
+ancestors contains progressively broader concepts, from immediate parent to broadest useful parent.
+
+Examples:
+
+udon noodles → {"canonical_name": "udon", "ancestors": ["wheat noodles", "noodles"], "attributes": {}}
+ramen noodles → {"canonical_name": "ramen", "ancestors": ["wheat noodles", "noodles"], "attributes": {}}
+noodles → {"canonical_name": "noodles", "ancestors": [], "attributes": {}}
+
+Thus a request for "noodles" can match "udon", while a request for "udon" cannot match "ramen".
+
+More examples:
+
+oat milk → {"canonical_name": "milk", "ancestors": [], "attributes": {"source": "oat"}}
+milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}}
+garlic powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}}
+garlic granules → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}}
+
+When a subtype can be represented as an attribute rather than a distinct concept, prefer the broader concept plus the attribute.
+
+For example:
+russet potato → potato + variety:russet
+red bell pepper → bell pepper + color:red
+oat milk → milk + source:oat
+
+## Synonyms and dialects
+
+Collapse equivalent terminology:
+rocket / arugula / rocket leaves → arugula
+capsicum / bell pepper / sweet pepper → bell pepper
+courgette / zucchini → zucchini
+aubergine / eggplant → eggplant
+spring onion / scallion / green onion → green onion
+minced beef / beef mince / ground beef → ground beef
+prawns / shrimp → shrimp
+cornflour / cornstarch → cornstarch
+icing sugar / powdered sugar / confectioners sugar → powdered sugar
+caster sugar / castor sugar / superfine sugar → castor sugar
+plain flour → all-purpose flour
+coriander leaf / coriander leaves / fresh coriander → cilantro
+chilli flakes / chili flakes / crushed red pepper / red pepper flakes → chili pepper + dry + crushed
+italian herbs / italian seasoning / mixed herbs → italian seasoning
+heavy cream / whipping cream → double cream
+light cream / half and half → single cream
+
+Do not preserve the input's dialect.
+
+Normalize singular/plural:
+potato / potatoes → potato
+sweet potato / sweet potatoes → sweet potato
+tomato / tomatoes → tomato
+
+Remove redundant descriptors:
+mozzarella / mozzarella cheese → mozzarella
+tuna / tuna fish → tuna
+
+Ignore quantities and brands unless they materially change the product:
+2 apples → apple
+Kewpie mayo → mayonnaise
+Tesco Spaghetti 500g → spaghetti
+
+## Practical grocery equivalence
+
+Optimize for shopping compatibility, not strict scientific identity.
+
+Descriptions that would reasonably satisfy the same shopping request should converge when appropriate.
+
+bottled water / drinking water / natural mineral water → water
+chili flakes / chilli flakes / red pepper flakes / crushed red pepper → chili pepper + dry + crushed
+garlic powder / garlic granules → garlic + dry + fine
+ground cumin / cumin powder → cumin + dry + fine
+
+Do not collapse meaningful distinctions:
+fresh garlic ≠ dry garlic
+garlic powder ≠ garlic paste
+chili flakes ≠ chili powder
+oat milk ≠ soy milk
+tomato ≠ tomato paste
+butter ≠ margarine
+olive oil ≠ vegetable oil
+chicken breast ≠ chicken thigh
+
+## Attributes
+
+Use attributes for meaningful properties that should affect matching.
+
+Possible attributes: state, form, type, variety, source, color, flavor, diet, preparation, etc.
+
+Normalize different wording describing the same property.
+
+Do not invent unspecified attributes.
+
+A broad item MUST remain broad:
+milk → milk (attributes: {})
+cheese → cheese (attributes: {})
+noodles → noodles (attributes: {})
+potato → potato (attributes: {})
+
+Never invent specificity.
+
+## Unknown or ambiguous items
+
+If you know the broad concept but not the specific subtype, use the broad concept and leave unknown properties unspecified.
+
+Japanese-style noodles → noodles + cuisine:japanese
+
+Do NOT guess udon or ramen.
+
+## Critical consistency rule
+
+Each item is processed independently.
+
+Never rely on previous outputs.
+
+The same grocery concept MUST map to the same representation regardless of wording, dialect, language, or spelling.
+
+Before responding, silently verify:
+1. Same meaning → same concept.
+2. Specific subtypes have a broader ancestor.
+3. Meaningful distinctions are preserved as attributes or child concepts.
+4. Unspecified properties remain unspecified.
+5. Singular, lowercase, stable terminology is used.
+6. The representation would allow an offline matcher to walk from the specific concept toward its ancestors and find the most specific compatible item.`;
 
 /**
  * Canonicalize a list of ingredient names using Gemini.
- * Returns a Map from original name → canonical name.
- *
- * If Gemini is unavailable or fails, falls back to a simple
- * lowercase + singularize (no synonym mapping).
+ * Returns a Map from original name → CanonicalIngredient.
  */
-export async function canonicalizeNames(names: string[]): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
+export async function canonicalizeNames(names: string[]): Promise<Map<string, CanonicalIngredient>> {
+  const result = new Map<string, CanonicalIngredient>();
 
   if (names.length === 0) return result;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    // Fallback: simple normalization.
     for (const name of names) {
       result.set(name, simpleNormalize(name));
     }
@@ -133,26 +195,23 @@ export async function canonicalizeNames(names: string[]): Promise<Map<string, st
     const model = genAI.getGenerativeModel({
       model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
       generationConfig: {
-        temperature: 0.0, // Zero temperature for maximum consistency.
+        temperature: 0.0,
         responseMimeType: 'application/json',
       },
     });
 
     const prompt = `${CANONICALIZATION_PROMPT}
 
-Now canonicalize these ingredients:
-${JSON.stringify(names)}
-
-Return the JSON array:`;
+Now canonicalize these grocery items. Return a JSON array with one object per item, preserving the original string in the "original" field:
+${JSON.stringify(names)}`;
 
     const response = await model.generateContent(prompt);
     const text = response.response.text();
 
-    let parsed: Array<{ original: string; canonical: string }>;
+    let parsed: Array<{ original: string; canonical_name: string; ancestors: string[]; attributes: Record<string, string> }>;
     try {
       parsed = JSON.parse(text);
     } catch {
-      // Try to extract JSON array from the response.
       const match = text.match(/\[[\s\S]*\]/);
       if (match) {
         parsed = JSON.parse(match[0]);
@@ -162,12 +221,16 @@ Return the JSON array:`;
     }
 
     for (const item of parsed) {
-      if (item.original && item.canonical) {
-        result.set(item.original, item.canonical.toLowerCase().trim());
+      if (item.original && item.canonical_name) {
+        result.set(item.original, {
+          canonical_name: item.canonical_name.toLowerCase().trim(),
+          ancestors: (item.ancestors || []).map((a) => a.toLowerCase().trim()),
+          attributes: normalizeAttributes(item.attributes || {}),
+        });
       }
     }
 
-    // Fill in any names that weren't returned (shouldn't happen, but just in case).
+    // Fill in any missing names with fallback.
     for (const name of names) {
       if (!result.has(name)) {
         result.set(name, simpleNormalize(name));
@@ -185,33 +248,87 @@ Return the JSON array:`;
 
 /**
  * Canonicalize a single ingredient name.
- * Convenience wrapper around canonicalizeNames.
  */
-export async function canonicalizeName(name: string): Promise<string> {
+export async function canonicalizeName(name: string): Promise<CanonicalIngredient> {
   const map = await canonicalizeNames([name]);
   return map.get(name) || simpleNormalize(name);
 }
 
 /**
- * Simple client-side fallback normalization.
- * Used when Gemini is not available (e.g. during build) or as a last resort.
+ * Normalize attribute keys and values to lowercase strings.
  */
-export function simpleNormalize(name: string): string {
-  if (!name) return '';
+function normalizeAttributes(attrs: Record<string, unknown>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== null && value !== undefined) {
+      result[key.toLowerCase().trim()] = String(value).toLowerCase().trim();
+    }
+  }
+  return result;
+}
+
+/**
+ * Simple client-side fallback.
+ * No synonym mapping or hierarchy — just basic normalization.
+ */
+export function simpleNormalize(name: string): CanonicalIngredient {
+  if (!name) return { canonical_name: '', ancestors: [], attributes: {} };
   let n = name.toLowerCase().trim();
-  // Remove parenthetical notes.
   n = n.replace(/\([^)]*\)/g, ' ');
-  // Remove percentages.
   n = n.replace(/\d+%/g, ' ');
-  // Remove "or" alternatives — keep first.
   n = n.split(/\s+or\s+/)[0];
-  // Normalize whitespace.
   n = n.replace(/\s+/g, ' ').trim();
-  // Simple singularization.
   if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
   else if (n.endsWith('ses')) n = n.slice(0, -2);
   else if (n.endsWith('s') && !n.endsWith('ss') && !n.endsWith('us') && !n.endsWith('is')) {
     n = n.slice(0, -1);
   }
-  return n.trim();
+  return { canonical_name: n.trim(), ancestors: [], attributes: {} };
+}
+
+/**
+ * Check if a pantry item satisfies a recipe ingredient.
+ *
+ * Directional matching: walk UP the pantry item's concept path.
+ * If the recipe's canonical_name is found in the pantry's path
+ * (canonical_name + ancestors), it's a concept match.
+ * Then check that all recipe attributes are satisfied by pantry attributes.
+ *
+ * Examples:
+ *   Recipe: "noodles", Pantry: "udon" (ancestors: [wheat noodles, noodles])
+ *   → "noodles" is in pantry's path → MATCH
+ *
+ *   Recipe: "udon", Pantry: "noodles" (ancestors: [])
+ *   → "udon" is NOT in pantry's path → NO MATCH (can't walk downward)
+ *
+ *   Recipe: "red bell pepper" (attr: color:red), Pantry: "bell pepper" (attr: {})
+ *   → Concept matches, but pantry doesn't have color:red → NO MATCH
+ *
+ *   Recipe: "bell pepper" (attr: {}), Pantry: "red bell pepper" (attr: color:red)
+ *   → Concept matches, recipe has no attributes → MATCH (pantry is more specific)
+ */
+export function isIngredientMatch(
+  recipe: CanonicalIngredient,
+  pantry: CanonicalIngredient,
+): boolean {
+  if (!recipe.canonical_name || !pantry.canonical_name) return false;
+
+  // Build the pantry item's concept path: [canonical_name, ...ancestors]
+  const pantryConcepts = [pantry.canonical_name, ...pantry.ancestors];
+
+  // Does the pantry's concept path include the recipe's canonical_name?
+  if (!pantryConcepts.includes(recipe.canonical_name)) {
+    return false;
+  }
+
+  // Concept match! Now check attribute compatibility.
+  // Every recipe attribute must be present in the pantry with the same value.
+  // (Recipe is the "requirement", pantry is the "actual".)
+  for (const [key, value] of Object.entries(recipe.attributes)) {
+    if (pantry.attributes[key] !== value) {
+      return false;
+    }
+  }
+
+  return true;
 }
