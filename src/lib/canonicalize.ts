@@ -228,14 +228,23 @@ Before responding, silently verify:
 /**
  * Canonicalize a list of ingredient names using Gemini.
  * Returns a Map from original name → CanonicalIngredient.
+ *
+ * Options:
+ *   - throwOnError: if true, throw on API failure instead of returning fallbacks.
+ *     Used by the backfill script so it doesn't write bad values to the DB.
  */
-export async function canonicalizeNames(names: string[]): Promise<Map<string, CanonicalIngredient>> {
+export async function canonicalizeNames(
+  names: string[],
+  options: { throwOnError?: boolean } = {},
+): Promise<Map<string, CanonicalIngredient>> {
   const result = new Map<string, CanonicalIngredient>();
+  const { throwOnError = false } = options;
 
   if (names.length === 0) return result;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
+    if (throwOnError) throw new Error('GEMINI_API_KEY is not set.');
     for (const name of names) {
       result.set(name, simpleNormalize(name));
     }
@@ -281,7 +290,6 @@ ${JSON.stringify(names)}`;
     for (const item of parsed) {
       if (item.original && item.canonical_name) {
         const attributes = normalizeAttributes(item.attributes || {});
-        // Filter hardAttributeKeys to only include keys that exist in attributes.
         const hardAttributeKeys = (item.hardAttributeKeys || []).filter(
           (k) => k in attributes,
         );
@@ -294,16 +302,22 @@ ${JSON.stringify(names)}`;
       }
     }
 
-    // Fill in any missing names with fallback.
+    // Fill in any names that weren't returned by Gemini.
     for (const name of names) {
       if (!result.has(name)) {
+        if (throwOnError) {
+          throw new Error(`Gemini did not return a result for: "${name}"`);
+        }
         result.set(name, simpleNormalize(name));
       }
     }
   } catch (err) {
+    if (throwOnError) throw err;
     console.error('Canonicalization failed, using fallback:', err);
     for (const name of names) {
-      result.set(name, simpleNormalize(name));
+      if (!result.has(name)) {
+        result.set(name, simpleNormalize(name));
+      }
     }
   }
 
