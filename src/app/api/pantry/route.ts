@@ -137,6 +137,7 @@ export async function POST(request: NextRequest) {
   let genericName = body.genericName;
   let canonicalAncestors: string[] | null = null;
   let canonicalAttributes: Record<string, string> | null = null;
+  let canonicalHardAttributeKeys: string[] | null = null;
 
   if (!genericName) {
     const ai = await categorizeAndCanonicalize(body.name);
@@ -144,6 +145,7 @@ export async function POST(request: NextRequest) {
     genericName = ai.canonical.canonical_name;
     canonicalAncestors = ai.canonical.ancestors.length > 0 ? ai.canonical.ancestors : null;
     canonicalAttributes = Object.keys(ai.canonical.attributes).length > 0 ? ai.canonical.attributes : null;
+    canonicalHardAttributeKeys = ai.canonical.hardAttributeKeys.length > 0 ? ai.canonical.hardAttributeKeys : null;
   }
 
   // Learn category overrides: check if the user has previously set a custom
@@ -163,6 +165,7 @@ export async function POST(request: NextRequest) {
         genericName,
         canonicalAncestors: canonicalAncestors as never,
         canonicalAttributes: canonicalAttributes as never,
+        canonicalHardAttributeKeys: canonicalHardAttributeKeys as never,
         category,
         quantity: body.quantity || null,
         expiryDate: body.expiryDate ? new Date(body.expiryDate) : null,

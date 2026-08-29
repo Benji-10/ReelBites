@@ -30,6 +30,7 @@ export interface CachedPantryItem {
   genericName: string | null;
   canonicalAncestors: string[] | null;
   canonicalAttributes: Record<string, string> | null;
+  canonicalHardAttributeKeys: string[] | null;
   category: string | null;
   quantity: string | null;
   expiryDate: string | null;

@@ -105,6 +105,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
               canonicalName: c.canonical_name,
               canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
               canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+              canonicalHardAttributeKeys: c.hardAttributeKeys.length > 0 ? c.hardAttributeKeys : null,
             };
           }
           return ing;

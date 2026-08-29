@@ -3,15 +3,19 @@
  *
  * Produces a hierarchical semantic representation:
  *   - canonical_name: the most specific meaningful grocery concept
- *   - ancestors: progressively broader concepts (immediate parent → broadest)
- *   - attributes: meaningful properties (state, form, color, variety, etc.)
+ *   - ancestors: IS-A (subtype) relationships only, NOT food categories
+ *   - attributes: meaningful properties, each marked as hard or soft
+ *   - hardAttributeKeys: which attributes are "hard" (must match for cooking)
  *
- * This allows directional matching:
- *   - Recipe needs "noodles" → pantry has "udon" → MATCH (udon's ancestors include noodles)
- *   - Recipe needs "udon" → pantry has "noodles" → NO MATCH (can't walk downward)
+ * HARD vs SOFT attributes:
+ *   - HARD: materially changes the recipe (e.g. "form" for garlic powder vs garlic paste)
+ *   - SOFT: doesn't really change the dish (e.g. "fat" for light butter vs regular butter)
+ *   Gemini decides per-attribute, per-ingredient, based on whether it alters the recipe.
  *
- * Both pantry items and recipe ingredients use this same function,
- * so they speak the same semantic language.
+ * Matching rules:
+ *   - Hard attributes: must match exactly (blocking)
+ *   - Soft attributes: if both sides have the attribute AND values differ → match but WARN
+ *   - Soft attributes: if only one side has it → ignore (not enough info)
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -20,6 +24,7 @@ export interface CanonicalIngredient {
   canonical_name: string;
   ancestors: string[];
   attributes: Record<string, string>;
+  hardAttributeKeys: string[]; // which attribute keys are "hard" (blocking)
 }
 
 const CANONICALIZATION_PROMPT = `You are a Grocery Semantic Normalizer.
@@ -30,8 +35,9 @@ For each input item, return a JSON object with this structure:
 {
   "original": "<the input string>",
   "canonical_name": "<most specific meaningful grocery concept>",
-  "ancestors": ["<immediate parent concept>", "<broader concept>", ...],
-  "attributes": {}
+  "ancestors": ["<immediate parent TYPE>", "<broader TYPE>", ...],
+  "attributes": {"<key>": "<value>", ...},
+  "hardAttributeKeys": ["<key>", ...]
 }
 
 Return a JSON ARRAY of these objects, one per input item. No explanations, no markdown.
@@ -46,33 +52,86 @@ Equivalent descriptions MUST independently produce the same representation.
 
 Use stable, lowercase US-English concept names.
 
-## Hierarchy
+## Hierarchy — IS-A relationships ONLY
 
 canonical_name is the item's most specific meaningful grocery concept.
 
-ancestors contains progressively broader concepts, from immediate parent to broadest useful parent.
+ancestors contains progressively broader TYPES, from immediate parent to broadest useful parent.
+
+CRITICAL: ancestors must be IS-A (subtype) relationships, NOT category memberships.
+- "udon IS A wheat noodle" → valid ancestor
+- "butter IS IN the dairy category" → NOT a valid ancestor
+- "spaghetti IS A pasta" → valid ancestor
+- "milk IS IN the dairy category" → NOT a valid ancestor
+
+Food categories like "dairy", "produce", "meat", "bakery" are NOT ancestors. They are categories. Do not use them as ancestors.
+
+Valid ancestors are more specific TYPES that a recipe might reasonably request:
+- udon → ["wheat noodles", "noodles"]
+- spaghetti → ["pasta"]
+- chicken breast → ["chicken"]
+- ground beef → ["beef"]
+
+If an item has no broader TYPE (it's already a base concept), use an empty ancestors array:
+- butter → {"ancestors": []}
+- milk → {"ancestors": []}
+- salt → {"ancestors": []}
+- egg → {"ancestors": []}
 
 Examples:
 
-udon noodles → {"canonical_name": "udon", "ancestors": ["wheat noodles", "noodles"], "attributes": {}}
-ramen noodles → {"canonical_name": "ramen", "ancestors": ["wheat noodles", "noodles"], "attributes": {}}
-noodles → {"canonical_name": "noodles", "ancestors": [], "attributes": {}}
+udon noodles → {"canonical_name": "udon", "ancestors": ["wheat noodles", "noodles"], "attributes": {}, "hardAttributeKeys": []}
+ramen noodles → {"canonical_name": "ramen", "ancestors": ["wheat noodles", "noodles"], "attributes": {}, "hardAttributeKeys": []}
+noodles → {"canonical_name": "noodles", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+spaghetti → {"canonical_name": "spaghetti", "ancestors": ["pasta"], "attributes": {}, "hardAttributeKeys": []}
+pasta → {"canonical_name": "pasta", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+butter → {"canonical_name": "butter", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
 Thus a request for "noodles" can match "udon", while a request for "udon" cannot match "ramen".
+A request for "butter" will NOT match "milk" (different concepts, no shared ancestor path).
 
-More examples:
+## Attributes — HARD vs SOFT
 
-oat milk → {"canonical_name": "milk", "ancestors": [], "attributes": {"source": "oat"}}
-milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}}
-garlic powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}}
-garlic granules → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}}
+Use attributes for meaningful properties. For EACH attribute, decide if it is HARD or SOFT:
 
-When a subtype can be represented as an attribute rather than a distinct concept, prefer the broader concept plus the attribute.
+- HARD: the attribute materially changes the recipe. Substituting would alter the dish.
+  Examples that are usually HARD:
+  - "form": garlic powder ≠ garlic paste ≠ fresh garlic (very different in cooking)
+  - "state": fresh garlic ≠ dry garlic (different flavor profile)
+  - "variety": red onion ≠ white onion (different flavor — pungent vs sweet)
 
-For example:
-russet potato → potato + variety:russet
-red bell pepper → bell pepper + color:red
-oat milk → milk + source:oat
+- SOFT: the attribute doesn't really change the dish. Substituting is fine.
+  Examples that are usually SOFT:
+  - "fat": light butter ≈ regular butter (barely changes the recipe)
+  - "color": red capsicum ≈ green capsicum (similar enough for most recipes)
+  - "brand": doesn't affect the recipe at all
+  - "cuisine": italian seasoning vs generic seasoning (close enough)
+
+  BUT context matters! "color" is SOFT for bell peppers (red vs green capsicum barely changes a recipe), but HARD for onions (red onion vs white onion is a real flavor difference).
+
+  Decide HARD vs SOFT based on whether a cook would consider the substitution acceptable for THIS specific ingredient. When unsure, lean toward SOFT (lenient matching).
+
+List the keys of HARD attributes in "hardAttributeKeys". All other attributes are implicitly SOFT.
+
+Examples:
+
+garlic powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}, "hardAttributeKeys": ["state", "form"]}
+garlic granules → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}, "hardAttributeKeys": ["state", "form"]}
+fresh garlic → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "fresh"}, "hardAttributeKeys": ["state"]}
+
+light butter → {"canonical_name": "butter", "ancestors": [], "attributes": {"fat": "light"}, "hardAttributeKeys": []}
+butter → {"canonical_name": "butter", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+red bell pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": []}
+bell pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+red onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": ["color"]}
+yellow onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "yellow"}, "hardAttributeKeys": ["color"]}
+onion → {"canonical_name": "onion", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+oat milk → {"canonical_name": "milk", "ancestors": [], "attributes": {"source": "oat"}, "hardAttributeKeys": []}
+milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
 ## Synonyms and dialects
 
@@ -89,7 +148,7 @@ icing sugar / powdered sugar / confectioners sugar → powdered sugar
 caster sugar / castor sugar / superfine sugar → castor sugar
 plain flour → all-purpose flour
 coriander leaf / coriander leaves / fresh coriander → cilantro
-chilli flakes / chili flakes / crushed red pepper / red pepper flakes → chili pepper + dry + crushed
+chilli flakes / chili flakes / crushed red pepper / red pepper flakes → chili pepper + state:dry + form:crushed
 italian herbs / italian seasoning / mixed herbs → italian seasoning
 heavy cream / whipping cream → double cream
 light cream / half and half → single cream
@@ -117,9 +176,9 @@ Optimize for shopping compatibility, not strict scientific identity.
 Descriptions that would reasonably satisfy the same shopping request should converge when appropriate.
 
 bottled water / drinking water / natural mineral water → water
-chili flakes / chilli flakes / red pepper flakes / crushed red pepper → chili pepper + dry + crushed
-garlic powder / garlic granules → garlic + dry + fine
-ground cumin / cumin powder → cumin + dry + fine
+chili flakes / chilli flakes / red pepper flakes / crushed red pepper → chili pepper + state:dry + form:crushed
+garlic powder / garlic granules → garlic + state:dry + form:fine
+ground cumin / cumin powder → cumin + state:dry + form:fine
 
 Do not collapse meaningful distinctions:
 fresh garlic ≠ dry garlic
@@ -131,21 +190,12 @@ butter ≠ margarine
 olive oil ≠ vegetable oil
 chicken breast ≠ chicken thigh
 
-## Attributes
+## A broad item MUST remain broad
 
-Use attributes for meaningful properties that should affect matching.
-
-Possible attributes: state, form, type, variety, source, color, flavor, diet, preparation, etc.
-
-Normalize different wording describing the same property.
-
-Do not invent unspecified attributes.
-
-A broad item MUST remain broad:
-milk → milk (attributes: {})
-cheese → cheese (attributes: {})
-noodles → noodles (attributes: {})
-potato → potato (attributes: {})
+milk → milk (attributes: {}, hardAttributeKeys: [])
+cheese → cheese (attributes: {}, hardAttributeKeys: [])
+noodles → noodles (attributes: {}, hardAttributeKeys: [])
+potato → potato (attributes: {}, hardAttributeKeys: [])
 
 Never invent specificity.
 
@@ -167,11 +217,13 @@ The same grocery concept MUST map to the same representation regardless of wordi
 
 Before responding, silently verify:
 1. Same meaning → same concept.
-2. Specific subtypes have a broader ancestor.
-3. Meaningful distinctions are preserved as attributes or child concepts.
-4. Unspecified properties remain unspecified.
-5. Singular, lowercase, stable terminology is used.
-6. The representation would allow an offline matcher to walk from the specific concept toward its ancestors and find the most specific compatible item.`;
+2. Ancestors are IS-A types, NOT food categories (dairy, produce, meat are NOT ancestors).
+3. Specific subtypes have a broader ancestor TYPE.
+4. Meaningful distinctions are preserved as HARD attributes.
+5. Minor variations are preserved as SOFT attributes.
+6. Unspecified properties remain unspecified.
+7. Singular, lowercase, stable terminology is used.
+8. hardAttributeKeys only contains keys that exist in attributes.`;
 
 /**
  * Canonicalize a list of ingredient names using Gemini.
@@ -208,7 +260,13 @@ ${JSON.stringify(names)}`;
     const response = await model.generateContent(prompt);
     const text = response.response.text();
 
-    let parsed: Array<{ original: string; canonical_name: string; ancestors: string[]; attributes: Record<string, string> }>;
+    let parsed: Array<{
+      original: string;
+      canonical_name: string;
+      ancestors: string[];
+      attributes: Record<string, unknown>;
+      hardAttributeKeys?: string[];
+    }>;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -222,10 +280,16 @@ ${JSON.stringify(names)}`;
 
     for (const item of parsed) {
       if (item.original && item.canonical_name) {
+        const attributes = normalizeAttributes(item.attributes || {});
+        // Filter hardAttributeKeys to only include keys that exist in attributes.
+        const hardAttributeKeys = (item.hardAttributeKeys || []).filter(
+          (k) => k in attributes,
+        );
         result.set(item.original, {
           canonical_name: item.canonical_name.toLowerCase().trim(),
           ancestors: (item.ancestors || []).map((a) => a.toLowerCase().trim()),
-          attributes: normalizeAttributes(item.attributes || {}),
+          attributes,
+          hardAttributeKeys,
         });
       }
     }
@@ -272,7 +336,7 @@ function normalizeAttributes(attrs: Record<string, unknown>): Record<string, str
  * No synonym mapping or hierarchy — just basic normalization.
  */
 export function simpleNormalize(name: string): CanonicalIngredient {
-  if (!name) return { canonical_name: '', ancestors: [], attributes: {} };
+  if (!name) return { canonical_name: '', ancestors: [], attributes: {}, hardAttributeKeys: [] };
   let n = name.toLowerCase().trim();
   n = n.replace(/\([^)]*\)/g, ' ');
   n = n.replace(/\d+%/g, ' ');
@@ -283,68 +347,120 @@ export function simpleNormalize(name: string): CanonicalIngredient {
   else if (n.endsWith('s') && !n.endsWith('ss') && !n.endsWith('us') && !n.endsWith('is')) {
     n = n.slice(0, -1);
   }
-  return { canonical_name: n.trim(), ancestors: [], attributes: {} };
+  return { canonical_name: n.trim(), ancestors: [], attributes: {}, hardAttributeKeys: [] };
+}
+
+// =============================================================================
+// MATCHING — directional, with hard/soft attribute handling
+// =============================================================================
+
+export interface MatchResult {
+  matched: boolean;
+  warnings: string[]; // soft attribute mismatches (non-blocking)
 }
 
 /**
  * Check if a pantry item satisfies a recipe ingredient.
  *
- * Directional matching: walk UP the pantry item's concept path.
- * If the recipe's canonical_name is found in the pantry's path
- * (canonical_name + ancestors), it's a concept match.
- * Then check that all recipe attributes are satisfied by pantry attributes.
+ * Returns a MatchResult with:
+ *   - matched: true if the pantry item can satisfy the recipe ingredient
+ *   - warnings: array of warning messages for soft attribute mismatches
  *
- * Examples:
- *   Recipe: "noodles", Pantry: "udon" (ancestors: [wheat noodles, noodles])
- *   → "noodles" is in pantry's path → MATCH
+ * Rules:
+ *   1. Concept match: recipe's canonical_name must be in pantry's concept path
+ *      (pantry's canonical_name + ancestors). Directional: specific satisfies general.
  *
- *   Recipe: "udon", Pantry: "noodles" (ancestors: [])
- *   → "udon" is NOT in pantry's path → NO MATCH (can't walk downward)
+ *   2. Hard attributes (from EITHER side's hardAttributeKeys):
+ *      Must match exactly. If either side marks an attribute as hard, it's blocking.
+ *      e.g. recipe "red onion" (color:red, HARD), pantry "yellow onion" (color:yellow, HARD) → NO MATCH
+ *      e.g. recipe "red onion" (color:red, HARD), pantry "onion" (no color) → NO MATCH
  *
- *   Recipe: "red bell pepper" (attr: color:red), Pantry: "bell pepper" (attr: {})
- *   → Concept matches, but pantry doesn't have color:red → NO MATCH
- *
- *   Recipe: "bell pepper" (attr: {}), Pantry: "red bell pepper" (attr: color:red)
- *   → Concept matches, recipe has no attributes → MATCH (pantry is more specific)
+ *   3. Soft attributes (NOT in hardAttributeKeys):
+ *      - If BOTH sides have the attribute AND values differ → match, but add a warning.
+ *      - If only one side has the attribute → ignore (not enough info).
+ *      e.g. recipe "light butter" (fat:light, SOFT), pantry "butter" (no fat) → MATCH, no warning
+ *      e.g. recipe "light butter" (fat:light, SOFT), pantry "butter" (fat:full, SOFT) → MATCH + warning
+ */
+export function matchIngredient(
+  recipe: CanonicalIngredient,
+  pantry: CanonicalIngredient,
+): MatchResult {
+  if (!recipe.canonical_name || !pantry.canonical_name) {
+    return { matched: false, warnings: [] };
+  }
+
+  // 1. Concept match: is recipe's canonical_name in pantry's concept path?
+  const pantryConcepts = [pantry.canonical_name, ...pantry.ancestors];
+  if (!pantryConcepts.includes(recipe.canonical_name)) {
+    return { matched: false, warnings: [] };
+  }
+
+  // 2. Collect all attribute keys from both sides.
+  const allKeys = new Set([
+    ...Object.keys(recipe.attributes),
+    ...Object.keys(pantry.attributes),
+  ]);
+
+  // 3. Determine which keys are hard (from either side).
+  const recipeHard = new Set(recipe.hardAttributeKeys);
+  const pantryHard = new Set(pantry.hardAttributeKeys);
+
+  const warnings: string[] = [];
+
+  for (const key of allKeys) {
+    const isHard = recipeHard.has(key) || pantryHard.has(key);
+    const recipeValue = recipe.attributes[key];
+    const pantryValue = pantry.attributes[key];
+
+    if (recipeValue === undefined || pantryValue === undefined) {
+      // Only one side has this attribute.
+      if (isHard) {
+        // Hard attribute missing on one side → no match (too generic).
+        return { matched: false, warnings: [] };
+      }
+      // Soft attribute missing on one side → ignore (not enough info).
+      continue;
+    }
+
+    // Both sides have the attribute.
+    if (recipeValue === pantryValue) {
+      // Values agree → all good.
+      continue;
+    }
+
+    // Values disagree.
+    if (isHard) {
+      // Hard attribute disagrees → no match.
+      return { matched: false, warnings: [] };
+    }
+
+    // Soft attribute disagrees → match but warn.
+    warnings.push(
+      `${key}: recipe needs "${recipeValue}", pantry has "${pantryValue}"`,
+    );
+  }
+
+  return { matched: true, warnings };
+}
+
+/**
+ * Backward-compat wrapper: returns true/false only.
+ * Use matchIngredient() if you need warnings.
  */
 export function isIngredientMatch(
   recipe: CanonicalIngredient,
   pantry: CanonicalIngredient,
 ): boolean {
-  if (!recipe.canonical_name || !pantry.canonical_name) return false;
-
-  // Build the pantry item's concept path: [canonical_name, ...ancestors]
-  const pantryConcepts = [pantry.canonical_name, ...pantry.ancestors];
-
-  // Does the pantry's concept path include the recipe's canonical_name?
-  if (!pantryConcepts.includes(recipe.canonical_name)) {
-    return false;
-  }
-
-  // Concept match! Now check attribute compatibility.
-  // Every recipe attribute must be present in the pantry with the same value.
-  // (Recipe is the "requirement", pantry is the "actual".)
-  for (const [key, value] of Object.entries(recipe.attributes)) {
-    if (pantry.attributes[key] !== value) {
-      return false;
-    }
-  }
-
-  return true;
+  return matchIngredient(recipe, pantry).matched;
 }
 
 // =============================================================================
 // COMBINED FUNCTIONS — canonicalize + enrich + match in one Gemini call
 // =============================================================================
-//
-// These functions reduce API calls by asking Gemini for everything we need
-// in a single request:
-//   - canonicalizeAndEnrich: canonical structure + category + expiry + quantity
-//   - scanMatchAndEnrich: canonical + enrich + which shopping list item to tick off
 
 export interface EnrichedIngredient extends CanonicalIngredient {
   category: string;
-  expiryDate: string | null; // YYYY-MM-DD format
+  expiryDate: string | null;
   quantity: string | null;
 }
 
@@ -356,11 +472,6 @@ const FOOD_CATEGORIES = [
 
 /**
  * Canonicalize + enrich a single product in one Gemini call.
- * Returns the canonical structure + category + expiry + quantity.
- *
- * Used by:
- *   - /api/pantry/enrich (pantry add via scan or manual)
- *   - shopping list manual tick (to prepare item for pantry)
  */
 export async function canonicalizeAndEnrich(args: {
   productName: string;
@@ -414,6 +525,7 @@ Return a SINGLE JSON object (not an array) with this structure:
   "canonical_name": "...",
   "ancestors": [...],
   "attributes": {...},
+  "hardAttributeKeys": [...],
   "category": "one of: ${FOOD_CATEGORIES.join(', ')}",
   "expiryDate": "YYYY-MM-DD or null",
   "quantity": "e.g. 400g, 1L, 6 pack, or null"
@@ -439,6 +551,7 @@ Only fill quantity if it's not already known. Return ONLY the JSON object.`,
       canonical_name?: string;
       ancestors?: string[];
       attributes?: Record<string, unknown>;
+      hardAttributeKeys?: string[];
       category?: string;
       expiryDate?: string;
       quantity?: string;
@@ -455,10 +568,16 @@ Only fill quantity if it's not already known. Return ONLY the JSON object.`,
       }
     }
 
+    const attributes = normalizeAttributes(parsed.attributes || {});
+    const hardAttributeKeys = (parsed.hardAttributeKeys || []).filter(
+      (k) => k in attributes,
+    );
+
     return {
       canonical_name: (parsed.canonical_name || productName).toLowerCase().trim(),
       ancestors: (parsed.ancestors || []).map((a) => a.toLowerCase().trim()),
-      attributes: normalizeAttributes(parsed.attributes || {}),
+      attributes,
+      hardAttributeKeys,
       category: parsed.category || knownCategory || 'Other',
       expiryDate: parsed.expiryDate || null,
       quantity: parsed.quantity || knownQuantity || null,
@@ -476,21 +595,7 @@ Only fill quantity if it's not already known. Return ONLY the JSON object.`,
 }
 
 /**
- * Scan-match-and-enrich: in ONE Gemini call, canonicalize the scanned product,
- * enrich it (category/expiry/quantity), AND determine which shopping list item
- * it should tick off.
- *
- * Matching rules (same as the recipe/pantry matcher, but evaluated by Gemini):
- *   - If the scanned product matches a specific shopping list item, tick that off.
- *   - If it matches a more general item, tick that off.
- *   - Specific beats general: if both "udon" and "noodles" are on the list,
- *     and the scan is "udon", tick "udon" (not "noodles").
- *   - If nothing matches, don't tick anything off.
- *
- * Returns:
- *   - canonical: the full canonical structure for pantry storage
- *   - category, expiryDate, quantity: for pantry storage
- *   - matchedItemId: the ID of the shopping list item to tick off (or null)
+ * Scan-match-and-enrich: canonicalize + enrich + match against shopping list in one call.
  */
 export async function scanMatchAndEnrich(args: {
   productName: string;
@@ -514,7 +619,6 @@ export async function scanMatchAndEnrich(args: {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // Build the shopping list for Gemini to match against.
   const shoppingListText = shoppingListItems.length > 0
     ? shoppingListItems.map((item, i) =>
         `${i + 1}. ID: "${item.id}" | Name: "${item.name}"${item.genericName ? ` | Canonical: "${item.genericName}"` : ''}`
@@ -541,9 +645,8 @@ ADDITIONAL TASKS for this single product:
 3. MATCH the scanned product against the shopping list below. If the scanned product satisfies a shopping list item, return the matching item's ID in "matchedItemId". Apply these matching rules:
    - A specific scanned product CAN satisfy a more general list item (e.g. scanning "udon" satisfies "noodles" on the list).
    - A general scanned product CANNOT satisfy a specific list item (e.g. scanning "noodles" does NOT satisfy "udon" on the list).
-   - If multiple items match, prefer the MOST SPECIFIC match (e.g. if list has both "udon" and "noodles", and scan is "udon", match "udon").
+   - If multiple items match, prefer the MOST SPECIFIC match.
    - If no item matches, set matchedItemId to null.
-   - Do not match already-irrelevant items (different ingredients entirely).
 
 Known information:
 ${barcode ? `Barcode: ${barcode}` : ''}
@@ -559,6 +662,7 @@ Return a SINGLE JSON object (not an array) with this structure:
   "canonical_name": "...",
   "ancestors": [...],
   "attributes": {...},
+  "hardAttributeKeys": [...],
   "category": "one of: ${FOOD_CATEGORIES.join(', ')}",
   "expiryDate": "YYYY-MM-DD or null",
   "quantity": "e.g. 400g, 1L, or null",
@@ -573,6 +677,7 @@ Return ONLY the JSON object.`,
       canonical_name?: string;
       ancestors?: string[];
       attributes?: Record<string, unknown>;
+      hardAttributeKeys?: string[];
       category?: string;
       expiryDate?: string;
       quantity?: string;
@@ -590,15 +695,20 @@ Return ONLY the JSON object.`,
       }
     }
 
-    // Validate that matchedItemId is actually in the shopping list.
     const matchedId = parsed.matchedItemId && shoppingListItems.some((i) => i.id === parsed.matchedItemId)
       ? parsed.matchedItemId
       : null;
 
+    const attributes = normalizeAttributes(parsed.attributes || {});
+    const hardAttributeKeys = (parsed.hardAttributeKeys || []).filter(
+      (k) => k in attributes,
+    );
+
     return {
       canonical_name: (parsed.canonical_name || productName).toLowerCase().trim(),
       ancestors: (parsed.ancestors || []).map((a) => a.toLowerCase().trim()),
-      attributes: normalizeAttributes(parsed.attributes || {}),
+      attributes,
+      hardAttributeKeys,
       category: parsed.category || 'Other',
       expiryDate: parsed.expiryDate || null,
       quantity: parsed.quantity || knownQuantity || null,

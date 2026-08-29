@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Check, X, ShoppingCart, Package, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Check, X, ShoppingCart, Package, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { useStore } from '@/lib/store';
-import { simpleNormalize, isIngredientMatch, type CanonicalIngredient } from '@/lib/canonicalize';
+import { simpleNormalize, matchIngredient, type CanonicalIngredient } from '@/lib/canonicalize';
 import type { SavedRecipe, RecipeIngredient } from '@/lib/types';
 
 interface PantryItem {
@@ -23,6 +23,7 @@ interface PantryItem {
   genericName: string | null;
   canonicalAncestors: string[] | null;
   canonicalAttributes: Record<string, string> | null;
+  canonicalHardAttributeKeys: string[] | null;
   category: string | null;
   isRunningLow: boolean;
 }
@@ -56,6 +57,7 @@ function buildCanonicalFromPantry(item: PantryItem): CanonicalIngredient {
     canonical_name: item.genericName || simpleNormalize(item.name).canonical_name,
     ancestors: item.canonicalAncestors || [],
     attributes: item.canonicalAttributes || {},
+    hardAttributeKeys: item.canonicalHardAttributeKeys || [],
   };
 }
 
@@ -65,6 +67,7 @@ function buildCanonicalFromRecipe(ing: RecipeIngredient): CanonicalIngredient {
       canonical_name: ing.canonicalName,
       ancestors: ing.canonicalAncestors || [],
       attributes: ing.canonicalAttributes || {},
+      hardAttributeKeys: ing.canonicalHardAttributeKeys || [],
     };
   }
   return simpleNormalize(ing.name);
@@ -82,7 +85,6 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
   const [adding, setAdding] = useState(false);
   const [canonicalizedIngredients, setCanonicalizedIngredients] = useState<RecipeIngredient[]>([]);
   const { authToken, pantryItems, fetchPantry } = useStore();
-  const hasCanonicalized = useRef(false);
 
   useEffect(() => {
     async function loadData() {
@@ -108,21 +110,23 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
     loadData();
   }, [authToken, pantryItems.length, fetchPantry]);
 
-  // ---- Lazy canonicalization of recipe ingredients ----
+  // ---- Lazy canonicalization of recipe ingredients (backward compat) ----
+  // If recipe ingredients don't have canonicalName yet, canonicalize them
+  // once and save to DB. The matching itself runs on EVERY render using
+  // the offline isIngredientMatch() function.
   useEffect(() => {
-    if (hasCanonicalized.current) return;
     if (!recipe.ingredients || recipe.ingredients.length === 0) return;
 
     const needsCanonicalization = recipe.ingredients.some((ing) => !ing.canonicalName);
 
     if (!needsCanonicalization) {
       setCanonicalizedIngredients(recipe.ingredients);
-      hasCanonicalized.current = true;
       return;
     }
 
-    hasCanonicalized.current = true;
     setCanonicalizing(true);
+
+    let cancelled = false;
 
     async function canonicalize() {
       try {
@@ -146,6 +150,7 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
               canonicalName: c.canonical_name,
               canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
               canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+              canonicalHardAttributeKeys: c.hardAttributeKeys.length > 0 ? c.hardAttributeKeys : null,
             };
           }
           const fallback = simpleNormalize(ing.name);
@@ -154,9 +159,11 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
             canonicalName: fallback.canonical_name,
             canonicalAncestors: fallback.ancestors.length > 0 ? fallback.ancestors : null,
             canonicalAttributes: Object.keys(fallback.attributes).length > 0 ? fallback.attributes : null,
+            canonicalHardAttributeKeys: fallback.hardAttributeKeys.length > 0 ? fallback.hardAttributeKeys : null,
           };
         });
 
+        if (cancelled) return;
         setCanonicalizedIngredients(updated);
 
         // Save to DB so we don't canonicalize again.
@@ -171,6 +178,7 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
           }).catch(() => {});
         }
       } catch {
+        if (cancelled) return;
         const fallback = recipe.ingredients.map((ing) => {
           const c = simpleNormalize(ing.name);
           return {
@@ -178,15 +186,18 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
             canonicalName: c.canonical_name,
             canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
             canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+            canonicalHardAttributeKeys: c.hardAttributeKeys.length > 0 ? c.hardAttributeKeys : null,
           };
         });
         setCanonicalizedIngredients(fallback);
       } finally {
-        setCanonicalizing(false);
+        if (!cancelled) setCanonicalizing(false);
       }
     }
 
     canonicalize();
+
+    return () => { cancelled = true; };
   }, [recipe, authToken]);
 
   const PANTRY_STAPLES = ['water'];
@@ -202,22 +213,34 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
     );
 
     if (isStaple) {
-      return { idx, ingredient: ing, inPantry: true, pantryItem: null, isStaple: true };
+      return { idx, ingredient: ing, inPantry: true, pantryItem: null, isStaple: true, warnings: [] };
     }
 
     const recipeCanonical = buildCanonicalFromRecipe(ing);
 
-    const match = pantryItems.find((p) => {
+    // Find the best match — prefer matches with no warnings over matches with warnings.
+    let bestMatch: PantryItem | null = null;
+    let bestWarnings: string[] = [];
+
+    for (const p of pantryItems) {
       const pantryCanonical = buildCanonicalFromPantry(p as PantryItem);
-      return isIngredientMatch(recipeCanonical, pantryCanonical);
-    });
+      const result = matchIngredient(recipeCanonical, pantryCanonical);
+      if (result.matched) {
+        if (bestMatch === null || result.warnings.length < bestWarnings.length) {
+          bestMatch = p as PantryItem;
+          bestWarnings = result.warnings;
+          if (result.warnings.length === 0) break; // Perfect match, no need to keep looking.
+        }
+      }
+    }
 
     return {
       idx,
       ingredient: ing,
-      inPantry: !!match,
-      pantryItem: match,
+      inPantry: !!bestMatch,
+      pantryItem: bestMatch,
       isStaple: false,
+      warnings: bestWarnings,
     };
   });
 
@@ -307,27 +330,42 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
         </div>
 
         <div className="space-y-1">
-          {ingredientStatus.map(({ idx, ingredient, inPantry, pantryItem }) => (
-            <div key={idx} className="flex items-center gap-2 text-sm py-1">
+          {ingredientStatus.map(({ idx, ingredient, inPantry, pantryItem, warnings }) => (
+            <div key={idx} className="flex items-start gap-2 text-sm py-1">
               {inPantry ? (
-                <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                <Check className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${warnings.length > 0 ? 'text-amber-500' : 'text-green-500'}`} />
               ) : (
-                <X className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                <X className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
               )}
-              <span className={inPantry ? 'text-muted-foreground line-through' : ''}>
-                {ingredient.name}
-              </span>
-              {(ingredient.amount || ingredient.unit) && (
-                <span className="text-xs text-muted-foreground">
-                  {ingredient.amount}
-                  {ingredient.unit && ` ${ingredient.unit}`}
-                </span>
-              )}
-              {inPantry && pantryItem?.isRunningLow && (
-                <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
-                  Low
-                </Badge>
-              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={inPantry ? 'text-muted-foreground line-through' : ''}>
+                    {ingredient.name}
+                  </span>
+                  {(ingredient.amount || ingredient.unit) && (
+                    <span className="text-xs text-muted-foreground">
+                      {ingredient.amount}
+                      {ingredient.unit && ` ${ingredient.unit}`}
+                    </span>
+                  )}
+                  {inPantry && pantryItem?.isRunningLow && (
+                    <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                      Low
+                    </Badge>
+                  )}
+                  {inPantry && warnings.length > 0 && (
+                    <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 gap-1">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {warnings.length} diff{warnings.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                </div>
+                {inPantry && warnings.length > 0 && (
+                  <p className="text-xs text-amber-600 mt-0.5 pl-0">
+                    {warnings.join('; ')}
+                  </p>
+                )}
+              </div>
             </div>
           ))}
         </div>

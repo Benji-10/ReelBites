@@ -80,8 +80,9 @@ model PantryItem {
 
   name          String
   genericName   String?  // Canonical name from Gemini (e.g. "bell pepper", "chicken breast")
-  canonicalAncestors  Json?  // Array of ancestor concepts, e.g. ["wheat noodles", "noodles"]
+  canonicalAncestors  Json?  // Array of ancestor TYPES (IS-A), e.g. ["wheat noodles", "noodles"]
   canonicalAttributes Json?  // Object of attributes, e.g. {"color": "red", "state": "dry"}
+  canonicalHardAttributeKeys Json?  // Array of attribute keys that are "hard" (blocking for matching)
   category      String?  // e.g. "Produce", "Dairy", "Meat & Fish"
   quantity      String?  // e.g. "2", "500g", "1 box"
   expiryDate    DateTime?

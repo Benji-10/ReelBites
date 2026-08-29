@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -95,6 +95,7 @@ export function PantryView() {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showUseUpConfirm, setShowUseUpConfirm] = useState(false);
   const [adding, setAdding] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -254,6 +255,14 @@ export function PantryView() {
     setShowDeleteConfirm(false);
     await fetch(`/api/pantry/${id}`, { method: 'DELETE', headers: authHeaders });
     toast.success('Removed from pantry.');
+  }
+
+  async function markAsUsedUp(id: string) {
+    removePantryItem(id);
+    setSelectedItem(null);
+    setShowUseUpConfirm(false);
+    await fetch(`/api/pantry/${id}`, { method: 'DELETE', headers: authHeaders });
+    toast.success('Marked as used up. Nice cooking!');
   }
 
   function startEdit(field: string, currentValue: string) {
@@ -630,6 +639,34 @@ export function PantryView() {
                 >
                   {selectedItem.isRunningLow ? '✓ Marked as running low' : 'Mark as running low'}
                 </Button>
+
+                {/* Use up — marks item as finished (same as delete, but friendlier UX) */}
+                <AlertDialog open={showUseUpConfirm} onOpenChange={setShowUseUpConfirm}>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full gap-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-950">
+                      <UtensilsCrossed className="h-3.5 w-3.5" />
+                      Used up
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Finished &ldquo;{selectedItem.name}&rdquo;?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This marks the item as used up and removes it from your pantry. Nice cooking!
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => markAsUsedUp(selectedItem.id)}
+                        className="bg-green-600 text-white hover:bg-green-700"
+                      >
+                        <UtensilsCrossed className="h-3.5 w-3.5 mr-1.5" />
+                        Used up
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
 
                 {/* Delete with confirmation */}
                 <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>

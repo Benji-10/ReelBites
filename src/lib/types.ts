@@ -42,9 +42,10 @@ export interface RecipeIngredient {
   notes?: string | null;
   evidence?: string | null;
   flag?: string | null;
-  canonicalName?: string | null;       // Gemini canonical_name (e.g. "bell pepper")
-  canonicalAncestors?: string[] | null; // Ancestor concepts (e.g. ["chicken"])
-  canonicalAttributes?: Record<string, string> | null; // Attributes (e.g. {"color": "red"})
+  canonicalName?: string | null;
+  canonicalAncestors?: string[] | null;
+  canonicalAttributes?: Record<string, string> | null;
+  canonicalHardAttributeKeys?: string[] | null; // which attributes are "hard" (blocking)
 }
 
 export interface RecipeInstruction {
