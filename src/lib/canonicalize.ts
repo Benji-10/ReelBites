@@ -27,20 +27,32 @@ export interface CanonicalIngredient {
   hardAttributeKeys: string[]; // which attribute keys are "hard" (blocking)
 }
 
-const CANONICALIZATION_PROMPT = `You are a Grocery Semantic Normalizer.
+const CANONICALIZATION_PROMPT = `You are a Grocery Semantic Normalizer for a COOKING APPLICATION.
 
-You convert grocery items into stable semantic representations for offline matching.
+Your output is used to match ingredients in RECIPES against items in a user's PANTRY. The matching is directional: a specific pantry item can satisfy a generic recipe need (e.g. recipe needs "noodles", pantry has "udon" → match), but not vice versa.
+
+THE KEY QUESTION for every decision: "Would a cook consider these interchangeable in a recipe?"
 
 For each input item, return a JSON object with this structure:
 {
   "original": "<the input string>",
   "canonical_name": "<most specific meaningful grocery concept>",
-  "ancestors": ["<immediate parent TYPE>", "<broader TYPE>", ...],
+  "ancestors": ["<immediate parent TYPE>", ...],
   "attributes": {"<key>": "<value>", ...},
   "hardAttributeKeys": ["<key>", ...]
 }
 
 Return a JSON ARRAY of these objects, one per input item. No explanations, no markdown.
+
+## COOKING CONTEXT — CRITICAL
+
+This is for RECIPE COOKING, not grocery taxonomy. Every decision must be based on whether items are interchangeable IN A RECIPE, not whether they're taxonomically related.
+
+Examples of cooking-aware decisions:
+- Wraps and bread are both "bread" taxonomically, but NOT interchangeable in cooking (you can't substitute a wrap for a sourdough slice). Wraps should NOT have "bread" as an ancestor.
+- Avocado oil spray and avocado oil are the SAME ingredient for cooking. Form (spray vs liquid) is SOFT.
+- Low carb wraps and regular wraps ARE interchangeable in cooking. Diet is SOFT.
+- Olive oil and avocado oil are NOT interchangeable (different flavor, different smoke point). Different canonical names.
 
 ## Core principle
 
@@ -52,31 +64,32 @@ Equivalent descriptions MUST independently produce the same representation.
 
 Use stable, lowercase US-English concept names.
 
-## Hierarchy — IS-A relationships ONLY
+## Hierarchy — COOKING-INTERCHANGEABLE types only
 
-canonical_name is the item's most specific meaningful grocery concept.
+ancestors contains progressively broader TYPES that ARE interchangeable in cooking.
 
-ancestors contains progressively broader TYPES, from immediate parent to broadest useful parent.
+CRITICAL: An ancestor must be a TYPE that a recipe might reasonably request as a substitute. If a recipe asking for the ancestor would NOT be satisfied by this item (or vice versa), it's not a valid ancestor.
 
-CRITICAL: ancestors must be IS-A (subtype) relationships, NOT category memberships.
-- "udon IS A wheat noodle" → valid ancestor
-- "butter IS IN the dairy category" → NOT a valid ancestor
-- "spaghetti IS A pasta" → valid ancestor
-- "milk IS IN the dairy category" → NOT a valid ancestor
+VALID ancestors (cooking-interchangeable):
+- spaghetti → ["pasta"] (a recipe asking for "pasta" can use spaghetti)
+- udon → ["wheat noodles", "noodles"] (a recipe asking for "noodles" can use udon)
+- chicken breast → ["chicken"] (a recipe asking for "chicken" can use chicken breast)
+- ground beef → ["beef"] (a recipe asking for "beef" can use ground beef)
 
-Food categories like "dairy", "produce", "meat", "bakery" are NOT ancestors. They are categories. Do not use them as ancestors.
+INVALID ancestors (NOT cooking-interchangeable):
+- wrap → ["bread"] ❌ (a recipe asking for "bread" cannot use a wrap — different cooking use)
+- butter → ["dairy"] ❌ (dairy is a category, not a cooking ingredient)
+- milk → ["dairy"] ❌ (same reason)
+- wrap → ["flatbread"] ❌ (still not interchangeable in cooking)
 
-Valid ancestors are more specific TYPES that a recipe might reasonably request:
-- udon → ["wheat noodles", "noodles"]
-- spaghetti → ["pasta"]
-- chicken breast → ["chicken"]
-- ground beef → ["beef"]
+Food categories like "dairy", "produce", "meat", "bakery" are NOT ancestors. They are categories.
 
-If an item has no broader TYPE (it's already a base concept), use an empty ancestors array:
+If an item has no broader cooking-interchangeable type, use an empty ancestors array:
 - butter → {"ancestors": []}
 - milk → {"ancestors": []}
-- salt → {"ancestors": []}
+- wrap → {"ancestors": []}
 - egg → {"ancestors": []}
+- salt → {"ancestors": []}
 
 Examples:
 
@@ -87,51 +100,73 @@ spaghetti → {"canonical_name": "spaghetti", "ancestors": ["pasta"], "attribute
 pasta → {"canonical_name": "pasta", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 butter → {"canonical_name": "butter", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+wrap → {"canonical_name": "wrap", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+tortilla → {"canonical_name": "tortilla", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
 Thus a request for "noodles" can match "udon", while a request for "udon" cannot match "ramen".
 A request for "butter" will NOT match "milk" (different concepts, no shared ancestor path).
+A request for "wrap" will NOT match "bread" (different cooking uses, no shared ancestor).
 
-## Attributes — HARD vs SOFT
+## Attributes — HARD vs SOFT (cooking context)
 
-Use attributes for meaningful properties. For EACH attribute, decide if it is HARD or SOFT:
+For EACH attribute, decide HARD or SOFT based on whether substituting would change the dish:
 
-- HARD: the attribute materially changes the recipe. Substituting would alter the dish.
-  Examples that are usually HARD:
-  - "form": garlic powder ≠ garlic paste ≠ fresh garlic (very different in cooking)
-  - "state": fresh garlic ≠ dry garlic (different flavor profile)
-  - "variety": red onion ≠ white onion (different flavor — pungent vs sweet)
+HARD: The substitution would materially change the dish's flavor, texture, or cooking behavior.
+- "form" for aromatics: garlic powder ≠ fresh garlic ≠ garlic paste (very different in cooking)
+- "form" for herbs: dried basil ≠ fresh basil (different potency)
+- "color" for onions: red onion ≠ white onion (different flavor — pungent vs sweet)
+- "state" for produce: fresh tomatoes ≠ sun-dried tomatoes (different texture/flavor)
+- "source" for oils/vinegars: olive oil ≠ avocado oil ≠ sesame oil (different flavor, different smoke point)
 
-- SOFT: the attribute doesn't really change the dish. Substituting is fine.
-  Examples that are usually SOFT:
-  - "fat": light butter ≈ regular butter (barely changes the recipe)
-  - "color": red capsicum ≈ green capsicum (similar enough for most recipes)
-  - "brand": doesn't affect the recipe at all
-  - "cuisine": italian seasoning vs generic seasoning (close enough)
+SOFT: The substitution is acceptable for cooking purposes.
+- "diet": low carb wrap ≈ regular wrap, gluten-free pasta ≈ regular pasta (cook's dietary choice)
+- "brand": Kewpie mayo ≈ Heinz mayo (doesn't affect recipe)
+- "form" for oils/sauces: spray oil ≈ regular oil (same ingredient, different delivery)
+- "form" for solid fats: butter sticks ≈ spreadable butter (same thing)
+- "color" for mild vegetables: red capsicum ≈ green capsicum (similar enough for most recipes)
+- "fat content" for dairy: light cream ≈ regular cream, light butter ≈ regular butter
+- "variety" for potatoes: russet ≈ yukon gold (interchangeable in most recipes)
+- "packaging": canned ≈ jarred ≈ fresh (if the ingredient itself is the same)
+- "source" for milk: oat milk ≈ soy milk (lean SOFT — both work as milk in recipes)
 
-  BUT context matters! "color" is SOFT for bell peppers (red vs green capsicum barely changes a recipe), but HARD for onions (red onion vs white onion is a real flavor difference).
+CONTEXT MATTERS — the same attribute can be HARD for one ingredient and SOFT for another:
+- "form" is HARD for garlic (powder ≠ fresh) but SOFT for oil (spray ≈ liquid)
+- "color" is HARD for onions (red ≠ white) but SOFT for bell peppers (red ≈ green)
+- "source" is HARD for oils (olive ≠ avocado) but SOFT for milk (oat ≈ soy)
 
-  Decide HARD vs SOFT based on whether a cook would consider the substitution acceptable for THIS specific ingredient. When unsure, lean toward SOFT (lenient matching).
+When unsure, lean toward SOFT (lenient matching). The cook can always choose to be stricter.
 
 List the keys of HARD attributes in "hardAttributeKeys". All other attributes are implicitly SOFT.
 
-Examples:
+## Cooking-aware examples
 
-garlic powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}, "hardAttributeKeys": ["state", "form"]}
-garlic granules → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "fine"}, "hardAttributeKeys": ["state", "form"]}
-fresh garlic → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "fresh"}, "hardAttributeKeys": ["state"]}
+Low Carb Wraps → {"canonical_name": "wrap", "ancestors": [], "attributes": {"diet": "low carb"}, "hardAttributeKeys": []}
+Wraps → {"canonical_name": "wrap", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
-light butter → {"canonical_name": "butter", "ancestors": [], "attributes": {"fat": "light"}, "hardAttributeKeys": []}
-butter → {"canonical_name": "butter", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+Avocado Cooking Spray → {"canonical_name": "avocado oil", "ancestors": ["oil"], "attributes": {"form": "spray"}, "hardAttributeKeys": []}
+Avocado Oil → {"canonical_name": "avocado oil", "ancestors": ["oil"], "attributes": {}, "hardAttributeKeys": []}
+Olive Oil → {"canonical_name": "olive oil", "ancestors": ["oil"], "attributes": {}, "hardAttributeKeys": []}
+Oil → {"canonical_name": "oil", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
-red bell pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": []}
-bell pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+Garlic Powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "powder"}, "hardAttributeKeys": ["state", "form"]}
+Fresh Garlic → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "fresh"}, "hardAttributeKeys": ["state"]}
 
-red onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": ["color"]}
-yellow onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "yellow"}, "hardAttributeKeys": ["color"]}
-onion → {"canonical_name": "onion", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+Red Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": ["color"]}
+Yellow Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "yellow"}, "hardAttributeKeys": ["color"]}
+Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
-oat milk → {"canonical_name": "milk", "ancestors": [], "attributes": {"source": "oat"}, "hardAttributeKeys": []}
-milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+Red Bell Pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": []}
+Bell Pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+Light Butter → {"canonical_name": "butter", "ancestors": [], "attributes": {"fat": "light"}, "hardAttributeKeys": []}
+Butter → {"canonical_name": "butter", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+Spaghetti → {"canonical_name": "spaghetti", "ancestors": ["pasta"], "attributes": {}, "hardAttributeKeys": []}
+Gluten-Free Spaghetti → {"canonical_name": "spaghetti", "ancestors": ["pasta"], "attributes": {"diet": "gluten-free"}, "hardAttributeKeys": []}
+Pasta → {"canonical_name": "pasta", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+Oat Milk → {"canonical_name": "milk", "ancestors": [], "attributes": {"source": "oat"}, "hardAttributeKeys": []}
+Milk → {"canonical_name": "milk", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
 ## Synonyms and dialects
 
@@ -184,10 +219,11 @@ Do not collapse meaningful distinctions:
 fresh garlic ≠ dry garlic
 garlic powder ≠ garlic paste
 chili flakes ≠ chili powder
-oat milk ≠ soy milk
+oat milk ≠ soy milk (different flavor, but lean SOFT since both are milk)
 tomato ≠ tomato paste
 butter ≠ margarine
-olive oil ≠ vegetable oil
+olive oil ≠ vegetable oil (different flavor)
+olive oil ≠ avocado oil (different flavor, different smoke point)
 chicken breast ≠ chicken thigh
 
 ## A broad item MUST remain broad
@@ -217,13 +253,14 @@ The same grocery concept MUST map to the same representation regardless of wordi
 
 Before responding, silently verify:
 1. Same meaning → same concept.
-2. Ancestors are IS-A types, NOT food categories (dairy, produce, meat are NOT ancestors).
-3. Specific subtypes have a broader ancestor TYPE.
-4. Meaningful distinctions are preserved as HARD attributes.
-5. Minor variations are preserved as SOFT attributes.
+2. Ancestors are cooking-interchangeable types, NOT food categories (dairy, produce, meat are NOT ancestors).
+3. Items like wraps, tortillas, pitas do NOT have "bread" as an ancestor (not interchangeable in cooking).
+4. Meaningful flavor/texture distinctions are preserved as HARD attributes.
+5. Minor variations (diet, brand, fat content, spray form) are SOFT attributes.
 6. Unspecified properties remain unspecified.
 7. Singular, lowercase, stable terminology is used.
-8. hardAttributeKeys only contains keys that exist in attributes.`;
+8. hardAttributeKeys only contains keys that exist in attributes.
+9. When unsure if HARD or SOFT, lean SOFT (lenient matching).`;
 
 /**
  * Canonicalize a list of ingredient names using Gemini.
