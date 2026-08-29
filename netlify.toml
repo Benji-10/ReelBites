@@ -9,7 +9,7 @@
 # =============================================================================
 
 [build]
-  command = "bun run build"
+  command = "npx prisma db push && bun run build"
   publish = ".next"
 
 [build.environment]
