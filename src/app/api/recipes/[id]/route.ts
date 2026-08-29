@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
+import { canonicalizeNames } from '@/lib/canonicalize';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -85,6 +86,29 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     for (const field of allowedFields) {
       if (field in body) {
         data[field] = body[field];
+      }
+    }
+
+    // If ingredients are being updated, canonicalize any that are missing canonicalName.
+    // This handles manual edits where the user adds/changes ingredients.
+    if (Array.isArray(data.ingredients) && data.ingredients.length > 0) {
+      const ingredients = data.ingredients as RecipeIngredient[];
+      const needsCanonicalization = ingredients.some((ing) => !ing.canonicalName);
+      if (needsCanonicalization) {
+        const names = ingredients.map((ing) => ing.name);
+        const canonicalMap = await canonicalizeNames(names);
+        data.ingredients = ingredients.map((ing) => {
+          const c = canonicalMap.get(ing.name);
+          if (c) {
+            return {
+              ...ing,
+              canonicalName: c.canonical_name,
+              canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
+              canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+            };
+          }
+          return ing;
+        });
       }
     }
 

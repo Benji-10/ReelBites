@@ -47,26 +47,6 @@ interface RecurringItem {
   quantity: string | null;
 }
 
-// Normalize a name for matching: lowercase, remove plurals, qualifiers, brand names.
-function normalizeForMatch(name: string): string {
-  let n = name.toLowerCase().trim();
-  // Remove common brand names and qualifiers.
-  n = n.replace(/\b(kewpie|heinz|napolina|barilla|nestle|knorr|mccormick|hellmann|lea&perrins|tabasco|soy sauce|kikkoman)\b/g, '');
-  // Remove qualifiers.
-  n = n.replace(/\b(fresh|dried|ground|whole|chopped|sliced|diced|minced|grated|peeled|raw|cooked|lean|extra|fine|coarse|minute|instant)\b/g, '');
-  // Remove percentages.
-  n = n.replace(/\d+%/g, '');
-  // Remove parenthetical notes.
-  n = n.replace(/\([^)]*\)/g, '');
-  // Normalize whitespace.
-  n = n.replace(/\s+/g, ' ').trim();
-  // Plural → singular.
-  if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
-  else if (n.endsWith('ses')) n = n.slice(0, -2);
-  else if (n.endsWith('s') && !n.endsWith('ss')) n = n.slice(0, -1);
-  return n.trim();
-}
-
 function guessSection(name: string): { section: string; order: number } {
   const lower = name.toLowerCase();
   if (/chicken|beef|pork|fish|salmon|shrimp|bacon|sausage/.test(lower)) return { section: 'Meat & Fish', order: 4 };
@@ -245,6 +225,35 @@ export function ShoppingListView() {
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ isChecked: newChecked }),
     });
+
+    // When an item is manually ticked (not via scan), canonicalize + enrich it
+    // so it's ready for the pantry when added to basket.
+    if (newChecked && !item.genericName) {
+      try {
+        const enrichRes = await fetch('/api/pantry/enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: item.name }),
+        });
+        if (enrichRes.ok) {
+          const enrichData = await enrichRes.json();
+          // Update the shopping list item with the canonical name.
+          await fetch(`/api/shopping-items/${item.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: JSON.stringify({ genericName: enrichData.canonical_name || enrichData.genericName }),
+          });
+          // Update local state.
+          setShoppingLists(lists.map((l) => l.id === activeListId ? {
+            ...l,
+            items: l.items.map((i) => i.id === item.id ? {
+              ...i,
+              genericName: enrichData.canonical_name || enrichData.genericName,
+            } : i),
+          } : l));
+        }
+      } catch {}
+    }
   }
 
   // Tap item → add to shopping basket.
@@ -310,47 +319,72 @@ export function ShoppingListView() {
     return () => { if (scannerRef.current) scannerRef.current.stop(); };
   }, []);
 
-  // When a barcode is scanned while shopping, look up the product and add to basket.
+  // When a barcode is scanned while shopping, look up the product on OpenFoodFacts,
+  // then send to /api/shopping-scan which canonicalizes + enriches + matches against
+  // the shopping list in ONE Gemini call.
   async function handleScannedBarcode(barcode: string) {
     toast.info(`Scanned: ${barcode}. Looking up...`);
 
+    let productName = `Product ${barcode}`;
+    let knownQuantity = '';
+
     try {
       const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
-      if (!res.ok) throw new Error('Lookup failed.');
-      const data = await res.json();
-
-      if (data.status === 1 && data.product) {
-        const p = data.product;
-        const name = p.product_name || p.generic_name || 'Unknown product';
-        const quantity = p.quantity || '';
-
-        // Check if this matches any item on the shopping list.
-        // Uses normalized matching (handles plurals, brand names, etc.)
-        const scannedNorm = normalizeForMatch(name);
-        const matchingItem = activeList?.items.find((i) => {
-          const itemNorm = normalizeForMatch(i.genericName || i.name);
-          return scannedNorm === itemNorm ||
-            (scannedNorm.length > 3 && itemNorm.length > 3 &&
-             (scannedNorm.includes(itemNorm) || itemNorm.includes(scannedNorm)));
-        });
-
-        if (matchingItem && !matchingItem.isChecked) {
-          // Tick it off the list.
-          toggleItem(matchingItem);
-          toast.success(`✓ ${matchingItem.name} — found on your list!`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 1 && data.product) {
+          const p = data.product;
+          productName = p.product_name || p.generic_name || `Product ${barcode}`;
+          knownQuantity = p.quantity || '';
         }
-
-        // Add to basket.
-        setBasket([...basket, { name, barcode, quantity, genericName: name.toLowerCase() }]);
-        toast.success(`${name} added to basket.`);
-      } else {
-        // Product not found — add with barcode as name.
-        setBasket([...basket, { name: `Product ${barcode}`, barcode }]);
-        toast.info('Product not found. Added to basket with barcode.');
       }
     } catch {
-      toast.info('Could not look up product. Added to basket.');
-      setBasket([...basket, { name: `Product ${barcode}`, barcode }]);
+      // OFF lookup failed — continue with barcode as name.
+    }
+
+    // Build the shopping list items for matching (only unchecked items).
+    const shoppingListItems = (activeList?.items || [])
+      .filter((i) => !i.isChecked)
+      .map((i) => ({ id: i.id, name: i.name, genericName: i.genericName }));
+
+    try {
+      const scanRes = await fetch('/api/shopping-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productName,
+          barcode,
+          knownQuantity,
+          shoppingListItems,
+        }),
+      });
+
+      if (!scanRes.ok) throw new Error('Scan processing failed');
+      const scanData = await scanRes.json();
+
+      // Tick off the matched shopping list item (if any).
+      if (scanData.matchedItemId) {
+        const matchedItem = activeList?.items.find((i) => i.id === scanData.matchedItemId);
+        if (matchedItem && !matchedItem.isChecked) {
+          toggleItem(matchedItem);
+          toast.success(`✓ ${matchedItem.name} — found on your list!`);
+        }
+      }
+
+      // Add to basket with all the enriched data.
+      setBasket([...basket, {
+        name: productName,
+        barcode,
+        quantity: scanData.quantity || knownQuantity || undefined,
+        genericName: scanData.canonical_name || scanData.genericName,
+        category: scanData.category,
+        expiryDate: scanData.expiryDate,
+      }]);
+      toast.success(`${productName} added to basket.`);
+    } catch {
+      // Fallback — add to basket without enrichment.
+      setBasket([...basket, { name: productName, barcode, quantity: knownQuantity || undefined }]);
+      toast.info('Could not process scan. Added to basket without enrichment.');
     }
   }
 
@@ -365,19 +399,27 @@ export function ShoppingListView() {
       const itemsToRemove: ShoppingItem[] = [];
 
       for (const item of basket) {
-        // Use basket item's custom fields if set, otherwise enrich with AI.
+        // If the basket item doesn't have a genericName (e.g. manually added),
+        // canonicalize + enrich it now using /api/pantry/enrich.
         let category = item.category || '';
         let expiryDate = item.expiryDate || '';
+        let genericName = item.genericName || '';
 
-        if (!category || !expiryDate) {
+        if (!genericName) {
           try {
             const enrichRes = await fetch('/api/pantry/enrich', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ barcode: item.barcode, name: item.name, quantity: item.quantity, category: item.category || '' }),
+              body: JSON.stringify({
+                barcode: item.barcode,
+                name: item.name,
+                quantity: item.quantity,
+                category: item.category || '',
+              }),
             });
             if (enrichRes.ok) {
               const enrichData = await enrichRes.json();
+              genericName = enrichData.canonical_name || enrichData.genericName || '';
               if (!category) category = enrichData.category || '';
               if (!expiryDate) expiryDate = enrichData.expiryDate || '';
             }
@@ -389,6 +431,7 @@ export function ShoppingListView() {
           headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({
             name: item.name,
+            genericName: genericName || undefined,
             quantity: item.quantity || undefined,
             barcode: item.barcode || undefined,
             category: category || undefined,
@@ -397,13 +440,12 @@ export function ShoppingListView() {
         });
 
         // Find matching shopping list items to remove.
-        if (activeList) {
-          const basketNorm = normalizeForMatch(item.genericName || item.name);
+        if (activeList && genericName) {
           const matched = activeList.items.filter((si) => {
-            const siNorm = normalizeForMatch(si.genericName || si.name);
-            return siNorm === basketNorm ||
-              (siNorm.length > 3 && basketNorm.length > 3 &&
-               (siNorm.includes(basketNorm) || basketNorm.includes(siNorm)));
+            // Simple match on canonical name for removing from list.
+            const siCanonical = si.genericName || '';
+            return siCanonical === genericName ||
+              si.name.toLowerCase() === item.name.toLowerCase();
           });
           itemsToRemove.push(...matched);
         }

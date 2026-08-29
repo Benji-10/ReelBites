@@ -332,3 +332,287 @@ export function isIngredientMatch(
 
   return true;
 }
+
+// =============================================================================
+// COMBINED FUNCTIONS — canonicalize + enrich + match in one Gemini call
+// =============================================================================
+//
+// These functions reduce API calls by asking Gemini for everything we need
+// in a single request:
+//   - canonicalizeAndEnrich: canonical structure + category + expiry + quantity
+//   - scanMatchAndEnrich: canonical + enrich + which shopping list item to tick off
+
+export interface EnrichedIngredient extends CanonicalIngredient {
+  category: string;
+  expiryDate: string | null; // YYYY-MM-DD format
+  quantity: string | null;
+}
+
+const FOOD_CATEGORIES = [
+  'Produce', 'Dairy', 'Meat & Fish', 'Bakery', 'Pantry', 'Grains', 'Pasta',
+  'Sauces', 'Spices', 'Canned Goods', 'Frozen', 'Snacks', 'Beverages',
+  'Condiments', 'Oils & Vinegars', 'Baking', 'Other',
+];
+
+/**
+ * Canonicalize + enrich a single product in one Gemini call.
+ * Returns the canonical structure + category + expiry + quantity.
+ *
+ * Used by:
+ *   - /api/pantry/enrich (pantry add via scan or manual)
+ *   - shopping list manual tick (to prepare item for pantry)
+ */
+export async function canonicalizeAndEnrich(args: {
+  productName: string;
+  barcode?: string;
+  knownQuantity?: string;
+  knownCategory?: string;
+}): Promise<EnrichedIngredient> {
+  const { productName, barcode, knownQuantity, knownCategory } = args;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    const fallback = simpleNormalize(productName);
+    return {
+      ...fallback,
+      category: knownCategory || 'Other',
+      expiryDate: null,
+      quantity: knownQuantity || null,
+    };
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const knownInfo = [
+    barcode ? `Barcode: ${barcode}` : null,
+    `Product name: ${productName}`,
+    knownQuantity ? `Known quantity: ${knownQuantity}` : null,
+    knownCategory ? `Known category: ${knownCategory}` : null,
+    `Today's date: ${today}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const result = await model.generateContent(
+      `${CANONICALIZATION_PROMPT}
+
+ADDITIONAL TASK: Also estimate category, expiry date, and quantity for this product.
+
+Known information:
+${knownInfo}
+
+Return a SINGLE JSON object (not an array) with this structure:
+{
+  "canonical_name": "...",
+  "ancestors": [...],
+  "attributes": {...},
+  "category": "one of: ${FOOD_CATEGORIES.join(', ')}",
+  "expiryDate": "YYYY-MM-DD or null",
+  "quantity": "e.g. 400g, 1L, 6 pack, or null"
+}
+
+Expiry guidelines:
+- Fresh produce: 5-7 days from today
+- Dairy: 7-14 days
+- Meat & Fish: 3-5 days
+- Bread/Bakery: 3-5 days
+- Canned goods: 1-2 years
+- Pasta/rice/grains: 1 year
+- Frozen: 3-6 months
+- Spices: 1 year
+- Oils/vinegars: 1 year
+- Condiments (opened): 3-6 months
+
+Only fill quantity if it's not already known. Return ONLY the JSON object.`,
+    );
+
+    const text = result.response.text();
+    let parsed: {
+      canonical_name?: string;
+      ancestors?: string[];
+      attributes?: Record<string, unknown>;
+      category?: string;
+      expiryDate?: string;
+      quantity?: string;
+    };
+
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      } else {
+        throw new Error('Could not parse response.');
+      }
+    }
+
+    return {
+      canonical_name: (parsed.canonical_name || productName).toLowerCase().trim(),
+      ancestors: (parsed.ancestors || []).map((a) => a.toLowerCase().trim()),
+      attributes: normalizeAttributes(parsed.attributes || {}),
+      category: parsed.category || knownCategory || 'Other',
+      expiryDate: parsed.expiryDate || null,
+      quantity: parsed.quantity || knownQuantity || null,
+    };
+  } catch (err) {
+    console.error('canonicalizeAndEnrich failed:', err);
+    const fallback = simpleNormalize(productName);
+    return {
+      ...fallback,
+      category: knownCategory || 'Other',
+      expiryDate: null,
+      quantity: knownQuantity || null,
+    };
+  }
+}
+
+/**
+ * Scan-match-and-enrich: in ONE Gemini call, canonicalize the scanned product,
+ * enrich it (category/expiry/quantity), AND determine which shopping list item
+ * it should tick off.
+ *
+ * Matching rules (same as the recipe/pantry matcher, but evaluated by Gemini):
+ *   - If the scanned product matches a specific shopping list item, tick that off.
+ *   - If it matches a more general item, tick that off.
+ *   - Specific beats general: if both "udon" and "noodles" are on the list,
+ *     and the scan is "udon", tick "udon" (not "noodles").
+ *   - If nothing matches, don't tick anything off.
+ *
+ * Returns:
+ *   - canonical: the full canonical structure for pantry storage
+ *   - category, expiryDate, quantity: for pantry storage
+ *   - matchedItemId: the ID of the shopping list item to tick off (or null)
+ */
+export async function scanMatchAndEnrich(args: {
+  productName: string;
+  barcode?: string;
+  knownQuantity?: string;
+  shoppingListItems: Array<{ id: string; name: string; genericName: string | null }>;
+}): Promise<EnrichedIngredient & { matchedItemId: string | null }> {
+  const { productName, barcode, knownQuantity, shoppingListItems } = args;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    const fallback = simpleNormalize(productName);
+    return {
+      ...fallback,
+      category: 'Other',
+      expiryDate: null,
+      quantity: knownQuantity || null,
+      matchedItemId: null,
+    };
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // Build the shopping list for Gemini to match against.
+  const shoppingListText = shoppingListItems.length > 0
+    ? shoppingListItems.map((item, i) =>
+        `${i + 1}. ID: "${item.id}" | Name: "${item.name}"${item.genericName ? ` | Canonical: "${item.genericName}"` : ''}`
+      ).join('\n')
+    : '(Shopping list is empty)';
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const result = await model.generateContent(
+      `${CANONICALIZATION_PROMPT}
+
+ADDITIONAL TASKS for this single product:
+
+1. Canonicalize the scanned product (as above).
+2. Estimate category, expiry date, and quantity.
+3. MATCH the scanned product against the shopping list below. If the scanned product satisfies a shopping list item, return the matching item's ID in "matchedItemId". Apply these matching rules:
+   - A specific scanned product CAN satisfy a more general list item (e.g. scanning "udon" satisfies "noodles" on the list).
+   - A general scanned product CANNOT satisfy a specific list item (e.g. scanning "noodles" does NOT satisfy "udon" on the list).
+   - If multiple items match, prefer the MOST SPECIFIC match (e.g. if list has both "udon" and "noodles", and scan is "udon", match "udon").
+   - If no item matches, set matchedItemId to null.
+   - Do not match already-irrelevant items (different ingredients entirely).
+
+Known information:
+${barcode ? `Barcode: ${barcode}` : ''}
+Product name: ${productName}
+${knownQuantity ? `Known quantity: ${knownQuantity}` : ''}
+Today's date: ${today}
+
+SHOPPING LIST:
+${shoppingListText}
+
+Return a SINGLE JSON object (not an array) with this structure:
+{
+  "canonical_name": "...",
+  "ancestors": [...],
+  "attributes": {...},
+  "category": "one of: ${FOOD_CATEGORIES.join(', ')}",
+  "expiryDate": "YYYY-MM-DD or null",
+  "quantity": "e.g. 400g, 1L, or null",
+  "matchedItemId": "the shopping list item ID that this scan satisfies, or null"
+}
+
+Return ONLY the JSON object.`,
+    );
+
+    const text = result.response.text();
+    let parsed: {
+      canonical_name?: string;
+      ancestors?: string[];
+      attributes?: Record<string, unknown>;
+      category?: string;
+      expiryDate?: string;
+      quantity?: string;
+      matchedItemId?: string | null;
+    };
+
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      } else {
+        throw new Error('Could not parse response.');
+      }
+    }
+
+    // Validate that matchedItemId is actually in the shopping list.
+    const matchedId = parsed.matchedItemId && shoppingListItems.some((i) => i.id === parsed.matchedItemId)
+      ? parsed.matchedItemId
+      : null;
+
+    return {
+      canonical_name: (parsed.canonical_name || productName).toLowerCase().trim(),
+      ancestors: (parsed.ancestors || []).map((a) => a.toLowerCase().trim()),
+      attributes: normalizeAttributes(parsed.attributes || {}),
+      category: parsed.category || 'Other',
+      expiryDate: parsed.expiryDate || null,
+      quantity: parsed.quantity || knownQuantity || null,
+      matchedItemId: matchedId,
+    };
+  } catch (err) {
+    console.error('scanMatchAndEnrich failed:', err);
+    const fallback = simpleNormalize(productName);
+    return {
+      ...fallback,
+      category: 'Other',
+      expiryDate: null,
+      quantity: knownQuantity || null,
+      matchedItemId: null,
+    };
+  }
+}

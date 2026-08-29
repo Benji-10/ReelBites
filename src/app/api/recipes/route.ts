@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb, migrateGuestRecipes } from '@/lib/auth';
+import { canonicalizeNames } from '@/lib/canonicalize';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -87,13 +88,36 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing "title" field.' }, { status: 400 });
   }
 
+  // Canonicalize ingredients if any are missing canonicalName.
+  // This ensures new recipes are immediately matchable against the pantry.
+  let ingredients = body.ingredients || [];
+  if (ingredients.length > 0) {
+    const needsCanonicalization = ingredients.some((ing) => !ing.canonicalName);
+    if (needsCanonicalization) {
+      const names = ingredients.map((ing) => ing.name);
+      const canonicalMap = await canonicalizeNames(names);
+      ingredients = ingredients.map((ing) => {
+        const c = canonicalMap.get(ing.name);
+        if (c) {
+          return {
+            ...ing,
+            canonicalName: c.canonical_name,
+            canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
+            canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+          };
+        }
+        return ing;
+      });
+    }
+  }
+
   try {
     const recipe = await db.recipe.create({
       data: {
         userId: user.id,
         title: body.title,
         description: body.description || null,
-        ingredients: (body.ingredients || []) as never,
+        ingredients: ingredients as never,
         instructions: (body.instructions || []) as never,
         metadata: (body.metadata || []) as never,
         flags: (body.flags || []) as never,
