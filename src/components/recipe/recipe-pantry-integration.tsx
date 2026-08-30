@@ -22,7 +22,7 @@ interface PantryItem {
   name: string;
   genericName: string | null;
   canonicalAncestors: string[] | null;
-  canonicalAttributes: Record<string, string> | null;
+  canonicalAttributes: Record<string, string | string[]> | null;
   canonicalHardAttributeKeys: string[] | null;
   category: string | null;
   isRunningLow: boolean;

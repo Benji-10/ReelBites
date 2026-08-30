@@ -45,8 +45,8 @@ export interface RecipeIngredient {
   flag?: string | null;
   canonicalName?: string | null;
   canonicalAncestors?: string[] | null;
-  canonicalAttributes?: Record<string, string> | null;
-  canonicalHardAttributeKeys?: string[] | null; // which attributes are "hard" (blocking)
+  canonicalAttributes?: Record<string, string | string[]> | null; // values can be arrays for "or" alternatives
+  canonicalHardAttributeKeys?: string[] | null;
 }
 
 export interface RecipeInstruction {

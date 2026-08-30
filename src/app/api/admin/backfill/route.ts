@@ -22,6 +22,10 @@
  *   API calls to stay under the limit. If a 429 is hit, it retries with
  *   exponential backoff (up to 3 retries).
  *
+ * Progress logging:
+ *   Every step is logged to the server console so you can watch progress
+ *   in the Netlify function logs.
+ *
  * No auth — admin script. Protect at network level or delete after use.
  * Idempotent: only updates items that need it (unless ?force=1).
  * Does NOT write fallback values — if Gemini fails, the item is skipped
@@ -50,10 +54,15 @@ async function sleep(ms: number) {
  */
 async function canonicalizeWithRetry(
   names: string[],
+  label: string = '',
 ): Promise<Map<string, import('@/lib/canonicalize').CanonicalIngredient> | null> {
+  const prefix = label ? `[backfill:${label}]` : '[backfill]';
+  console.log(`${prefix} Calling Gemini with ${names.length} unique name(s)...`);
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await canonicalizeNames(names, { throwOnError: true });
+      console.log(`${prefix} ✅ Gemini returned ${result.size} canonical entries.`);
       return result;
     } catch (err) {
       const is429 = err instanceof Error && err.message.includes('429');
@@ -61,14 +70,13 @@ async function canonicalizeWithRetry(
 
       if (is429 || isQuota) {
         if (attempt < MAX_RETRIES) {
-          // Exponential backoff: 60s, 90s, 120s
           const waitMs = 60000 * Math.pow(1.5, attempt);
-          console.log(`[backfill] 429 hit, waiting ${waitMs / 1000}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+          console.log(`${prefix} ⏳ 429 rate limit hit. Waiting ${waitMs / 1000}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
           await sleep(waitMs);
           continue;
         }
+        console.error(`${prefix} ❌ 429 rate limit — out of retries.`);
       }
-      // Non-429 error or out of retries — re-throw.
       throw err;
     }
   }
@@ -80,6 +88,10 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const force = searchParams.get('force') === '1';
   const scope = searchParams.get('scope') || 'all';
+
+  console.log('========================================');
+  console.log(`[backfill] START — force=${force}, scope=${scope}`);
+  console.log('========================================');
 
   const result = {
     force,
@@ -95,6 +107,7 @@ export async function GET(request: NextRequest) {
   // PANTRY BACKFILL
   // ===========================================================================
   if (scope === 'all' || scope === 'pantry') {
+    console.log('[backfill:pantry] Phase 1 — Pantry items');
     try {
       const items = await db.pantryItem.findMany({
         select: {
@@ -107,6 +120,7 @@ export async function GET(request: NextRequest) {
         },
       });
       result.pantry.total = items.length;
+      console.log(`[backfill:pantry] Found ${items.length} total pantry items.`);
 
       const needsBackfill = items.filter((item) => {
         if (force) return true;
@@ -118,20 +132,28 @@ export async function GET(request: NextRequest) {
         );
       });
 
+      console.log(`[backfill:pantry] ${needsBackfill.length} items need backfill, ${items.length - needsBackfill.length} already up to date.`);
+
       if (needsBackfill.length > 0) {
         const uniqueNames = Array.from(new Set(needsBackfill.map((i) => i.name).filter(Boolean)));
+        console.log(`[backfill:pantry] Deduplicated to ${uniqueNames.length} unique names.`);
 
-        const canonicalMap = await canonicalizeWithRetry(uniqueNames);
+        const canonicalMap = await canonicalizeWithRetry(uniqueNames, 'pantry');
 
         if (canonicalMap === null) {
           result.rateLimited = true;
           result.pantry.failed = needsBackfill.length;
           result.nextSteps.push('Pantry: rate limited. Wait 1 minute and re-run.');
+          console.log(`[backfill:pantry] ❌ Rate limited — skipping all ${needsBackfill.length} items.`);
         } else {
+          console.log(`[backfill:pantry] Updating database records...`);
+          let count = 0;
           for (const item of needsBackfill) {
+            count++;
             const canonical = canonicalMap.get(item.name);
             if (!canonical || !canonical.canonical_name) {
               result.pantry.failed++;
+              console.log(`[backfill:pantry]   ${count}/${needsBackfill.length} ⚠️  No result for "${item.name}"`);
               continue;
             }
 
@@ -150,23 +172,32 @@ export async function GET(request: NextRequest) {
                 },
               });
               result.pantry.updated++;
+
+              // Log progress every 5 items or on the last item.
+              if (count % 5 === 0 || count === needsBackfill.length) {
+                const pct = Math.round((count / needsBackfill.length) * 100);
+                console.log(`[backfill:pantry]   ${count}/${needsBackfill.length} (${pct}%) — updated "${item.name}" → "${canonical.canonical_name}"`);
+              }
             } catch (err) {
-              console.error(`[backfill] Pantry item ${item.id} failed:`, err);
+              console.error(`[backfill:pantry]   ${count}/${needsBackfill.length} ❌ Failed "${item.name}":`, err);
               result.pantry.failed++;
             }
           }
+          console.log(`[backfill:pantry] ✅ Done. Updated ${result.pantry.updated}, failed ${result.pantry.failed}.`);
         }
       } else {
         result.pantry.skipped = items.length;
+        console.log(`[backfill:pantry] ✅ All ${items.length} items already up to date — skipping.`);
       }
     } catch (err) {
-      console.error('[backfill] Pantry backfill failed:', err);
+      console.error('[backfill:pantry] ❌ Pantry backfill failed:', err);
       result.pantry.failed++;
     }
   }
 
   // Rate-limit delay between pantry and recipe phases.
   if (scope === 'all') {
+    console.log(`[backfill] Waiting ${RATE_LIMIT_DELAY_MS / 1000}s before recipe phase...`);
     await sleep(RATE_LIMIT_DELAY_MS);
   }
 
@@ -174,17 +205,24 @@ export async function GET(request: NextRequest) {
   // RECIPE BACKFILL
   // ===========================================================================
   if (scope === 'all' || scope === 'recipes') {
+    console.log('[backfill:recipes] Phase 2 — Recipe ingredients');
     try {
       const recipes = await db.recipe.findMany({
         select: { id: true, ingredients: true },
       });
       result.recipes.total = recipes.length;
+      console.log(`[backfill:recipes] Found ${recipes.length} total recipes.`);
 
+      let processed = 0;
       for (const recipe of recipes) {
+        processed++;
+        const pct = Math.round((processed / recipes.length) * 100);
+
         try {
           const ingredients = recipe.ingredients as RecipeIngredient[];
           if (!Array.isArray(ingredients) || ingredients.length === 0) {
             result.recipes.skipped++;
+            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: no ingredients, skipped.`);
             continue;
           }
 
@@ -197,6 +235,7 @@ export async function GET(request: NextRequest) {
 
           if (!needsBackfill) {
             result.recipes.skipped++;
+            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: already canonicalized, skipped.`);
             continue;
           }
 
@@ -212,18 +251,20 @@ export async function GET(request: NextRequest) {
           }
 
           const uniqueNames = Array.from(new Set(namesToCanonicalize.filter(Boolean)));
+          console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: canonicalizing ${uniqueNames.length} ingredient(s)...`);
 
           // Rate-limit: wait before each recipe's API call.
           await sleep(RATE_LIMIT_DELAY_MS);
 
-          const canonicalMap = await canonicalizeWithRetry(uniqueNames);
+          const canonicalMap = await canonicalizeWithRetry(uniqueNames, `recipe-${processed}`);
 
           if (canonicalMap === null) {
             result.rateLimited = true;
             result.recipes.failed++;
             result.nextSteps.push(`Recipe "${recipe.id}": rate limited. Re-run to retry.`);
+            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Rate limited. Stopping recipe phase.`);
             // Stop processing more recipes — we're rate limited.
-            result.recipes.skipped += recipes.length - result.recipes.updated - result.recipes.failed - result.recipes.skipped;
+            result.recipes.skipped += recipes.length - processed;
             break;
           }
 
@@ -246,18 +287,26 @@ export async function GET(request: NextRequest) {
             data: { ingredients: updatedIngredients as never },
           });
           result.recipes.updated++;
+          console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ✅ Updated.`);
         } catch (err) {
-          console.error(`[backfill] Recipe ${recipe.id} failed:`, err);
+          console.error(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Failed:`, err);
           result.recipes.failed++;
         }
       }
+      console.log(`[backfill:recipes] ✅ Done. Updated ${result.recipes.updated}, skipped ${result.recipes.skipped}, failed ${result.recipes.failed}.`);
     } catch (err) {
-      console.error('[backfill] Recipe backfill failed:', err);
+      console.error('[backfill:recipes] ❌ Recipe backfill failed:', err);
       result.recipes.failed++;
     }
   }
 
   result.duration = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+
+  console.log('========================================');
+  console.log(`[backfill] COMPLETE — ${result.duration}`);
+  console.log(`[backfill] Pantry:  ${result.pantry.updated} updated, ${result.pantry.skipped} skipped, ${result.pantry.failed} failed (of ${result.pantry.total})`);
+  console.log(`[backfill] Recipes: ${result.recipes.updated} updated, ${result.recipes.skipped} skipped, ${result.recipes.failed} failed (of ${result.recipes.total})`);
+  console.log('========================================');
 
   // Generate next steps.
   if (result.rateLimited) {

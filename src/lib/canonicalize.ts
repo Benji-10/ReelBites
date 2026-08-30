@@ -23,7 +23,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 export interface CanonicalIngredient {
   canonical_name: string;
   ancestors: string[];
-  attributes: Record<string, string>;
+  attributes: Record<string, string | string[]>;
   hardAttributeKeys: string[]; // which attribute keys are "hard" (blocking)
 }
 
@@ -173,6 +173,24 @@ When unsure, lean toward SOFT (lenient matching). The cook can always choose to 
 
 List the keys of HARD attributes in "hardAttributeKeys". All other attributes are implicitly SOFT.
 
+## "OR" alternatives — use ARRAY values
+
+When a recipe ingredient offers alternatives for a specific attribute (e.g. "minced beef or lamb"), use an ARRAY for that attribute value, NOT a single string.
+
+This allows the matcher to check if the pantry item satisfies ANY of the alternatives.
+
+Examples:
+- "minced beef or lamb" → {"canonical_name": "ground meat", "ancestors": [], "attributes": {"source": ["beef", "lamb"]}, "hardAttributeKeys": ["source"]}
+  (A pantry item with source "beef" OR source "lamb" will match.)
+- "sour cream or greek yogurt" → {"canonical_name": "sour cream", "ancestors": [], "attributes": {"alternative": ["greek yogurt"]}, "hardAttributeKeys": []}
+  (If the concepts are different, use the first as canonical_name and put the alternative in an "alternative" attribute as SOFT.)
+- "fresh or dried basil" → {"canonical_name": "basil", "ancestors": [], "attributes": {"state": ["fresh", "dry"]}, "hardAttributeKeys": ["state"]}
+  (A pantry item with state "fresh" OR state "dry" will match.)
+- "garlic powder or granules" → {"canonical_name": "garlic", "ancestors": [], "attributes": {"form": ["powder", "granules"]}, "hardAttributeKeys": ["state", "form"]}
+  (Both forms are equivalent — either will match.)
+
+NEVER use a string like "beef or lamb" as an attribute value. ALWAYS use an array: ["beef", "lamb"].
+
 ## Cooking-aware examples
 
 Low Carb Wraps → {"canonical_name": "wrap", "ancestors": [], "attributes": {"diet": "low carb"}, "hardAttributeKeys": []}
@@ -306,7 +324,8 @@ Before responding, silently verify:
 8. Unspecified properties remain unspecified.
 9. Singular, lowercase, stable terminology is used.
 10. hardAttributeKeys only contains keys that exist in attributes.
-11. When unsure if HARD or SOFT, lean SOFT (lenient matching).`;
+11. "OR" alternatives use ARRAY values, never strings like "beef or lamb".
+12. When unsure if HARD or SOFT, lean SOFT (lenient matching).`;
 
 /**
  * Canonicalize a list of ingredient names using Gemini.
@@ -417,12 +436,30 @@ export async function canonicalizeName(name: string): Promise<CanonicalIngredien
 
 /**
  * Normalize attribute keys and values to lowercase strings.
+ * Handles both string values and array values (for "or" alternatives).
  */
-function normalizeAttributes(attrs: Record<string, unknown>): Record<string, string> {
-  const result: Record<string, string> = {};
+function normalizeAttributes(attrs: Record<string, unknown>): Record<string, string | string[]> {
+  const result: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(attrs)) {
-    if (value !== null && value !== undefined) {
-      result[key.toLowerCase().trim()] = String(value).toLowerCase().trim();
+    if (value === null || value === undefined) continue;
+
+    const normalizedKey = key.toLowerCase().trim();
+
+    if (Array.isArray(value)) {
+      // Array value — normalize each element.
+      const arr = value
+        .map((v) => (typeof v === 'string' ? v.toLowerCase().trim() : String(v).toLowerCase().trim()))
+        .filter((v) => v.length > 0);
+      if (arr.length > 0) {
+        result[normalizedKey] = arr.length === 1 ? arr[0] : arr;
+      }
+    } else if (typeof value === 'string') {
+      const trimmed = value.toLowerCase().trim();
+      if (trimmed.length > 0) {
+        result[normalizedKey] = trimmed;
+      }
+    } else {
+      result[normalizedKey] = String(value).toLowerCase().trim();
     }
   }
   return result;
@@ -457,6 +494,35 @@ export interface MatchResult {
 }
 
 /**
+ * Check if two attribute values match.
+ * Values can be strings or arrays of strings (for "or" alternatives).
+ *
+ * - Both strings: match if equal.
+ * - Recipe array, pantry string: match if pantry value is in recipe array.
+ * - Recipe string, pantry array: match if recipe value is in pantry array.
+ * - Both arrays: match if they have any intersection.
+ */
+function attributeValuesMatch(
+  recipeValue: string | string[],
+  pantryValue: string | string[],
+): boolean {
+  const recipeArr = Array.isArray(recipeValue) ? recipeValue : [recipeValue];
+  const pantryArr = Array.isArray(pantryValue) ? pantryValue : [pantryValue];
+  // Check for intersection.
+  return recipeArr.some((r) => pantryArr.includes(r));
+}
+
+/**
+ * Format an attribute value for display in warnings.
+ */
+function formatAttributeValue(value: string | string[]): string {
+  if (Array.isArray(value)) {
+    return value.join(' or ');
+  }
+  return value;
+}
+
+/**
  * Check if a pantry item satisfies a recipe ingredient.
  *
  * Returns a MatchResult with:
@@ -469,24 +535,21 @@ export interface MatchResult {
  *
  *   2. Attribute matching (ASYMMETRIC):
  *      The recipe is the REQUIREMENT, the pantry is what you HAVE.
+ *      Attribute values can be strings OR arrays (for "or" alternatives like
+ *      source: ["beef", "lamb"]). Arrays match if there's any intersection.
  *
  *      a) Both sides have the attribute:
- *         - Values agree → match.
- *         - Values disagree + either side marks it HARD → NO MATCH.
- *         - Values disagree + both SOFT → match + warning.
+ *         - Values match (or arrays intersect) → match.
+ *         - Values don't match + either side marks it HARD → NO MATCH.
+ *         - Values don't match + both SOFT → match + warning.
  *
  *      b) Only RECIPE has the attribute (pantry doesn't):
  *         - HARD on recipe → NO MATCH (pantry is too generic).
- *           e.g. recipe "red onion" (color:red, HARD), pantry "onion" → NO MATCH.
  *         - SOFT on recipe → ignore (not enough info to dispute).
  *
  *      c) Only PANTRY has the attribute (recipe doesn't):
  *         - MATCH regardless of hard/soft. The pantry is MORE SPECIFIC than
  *           the recipe needs, which is fine.
- *           e.g. recipe "onion", pantry "red onion" (color:red, HARD) → MATCH.
- *           e.g. recipe "chicken breast", pantry "chicken breast" (state:fresh, HARD) → MATCH.
- *           e.g. recipe "garlic", pantry "garlic powder" (state:dry, HARD) → MATCH.
- *                (The recipe didn't specify fresh or dry, so dry garlic satisfies.)
  */
 export function matchIngredient(
   recipe: CanonicalIngredient,
@@ -521,7 +584,7 @@ export function matchIngredient(
 
     if (recipeHasIt && pantryHasIt) {
       // Both sides have the attribute.
-      if (recipeValue === pantryValue) continue; // Agree.
+      if (attributeValuesMatch(recipeValue!, pantryValue!)) continue; // Match.
 
       const isHard = recipeHard.has(key) || pantryHard.has(key);
       if (isHard) {
@@ -531,7 +594,7 @@ export function matchIngredient(
 
       // Soft disagreement → match but warn.
       warnings.push(
-        `${key}: recipe needs "${recipeValue}", pantry has "${pantryValue}"`,
+        `${key}: recipe needs "${formatAttributeValue(recipeValue!)}", pantry has "${formatAttributeValue(pantryValue!)}"`,
       );
     } else if (recipeHasIt && !pantryHasIt) {
       // Only recipe has it — pantry is too generic.
@@ -543,7 +606,6 @@ export function matchIngredient(
     } else if (!recipeHasIt && pantryHasIt) {
       // Only pantry has it — pantry is more specific than the recipe needs.
       // This is always fine: the pantry item satisfies the generic recipe need.
-      // (No warning needed — the recipe didn't ask for this attribute.)
       continue;
     }
   }
