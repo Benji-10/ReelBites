@@ -2,18 +2,21 @@
 import { useRouter } from 'next/navigation';
 
 import { useEffect, useState, useMemo } from 'react';
-import { BookOpen, Plus, Star, Folder } from 'lucide-react';
+import { BookOpen, Plus, Star, Folder, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { useStore } from '@/lib/store';
 import { RecipeCard } from './recipe-card';
+import { PantryRecipeGenerator } from './pantry-recipe-generator';
 
-type FilterType = 'all' | 'favorites' | string; // string = collection name
+type FilterType = 'all' | 'favorites' | 'generated' | string; // string = collection name
 
 export function RecipeBox() {
   const router = useRouter();
-  const { recipes, fetchRecipes, authToken } = useStore();
+  const { recipes, fetchRecipes, authToken, pantryItems } = useStore();
   const [filter, setFilter] = useState<FilterType>('all');
+  const [showGenerator, setShowGenerator] = useState(false);
 
   useEffect(() => {
     if (recipes.length === 0) {
@@ -34,10 +37,12 @@ export function RecipeBox() {
   const filteredRecipes = useMemo(() => {
     if (filter === 'all') return recipes;
     if (filter === 'favorites') return recipes.filter((r) => r.isFavorite);
+    if (filter === 'generated') return recipes.filter((r) => r.id.startsWith('temp-pantry-'));
     return recipes.filter((r) => r.collection === filter);
   }, [recipes, filter]);
 
   const favoritesCount = recipes.filter((r) => r.isFavorite).length;
+  const generatedCount = recipes.filter((r) => r.id.startsWith('temp-pantry-')).length;
 
   return (
     <div className="space-y-6">
@@ -53,10 +58,22 @@ export function RecipeBox() {
               : `${recipes.length} recipe${recipes.length === 1 ? '' : 's'} saved.`}
           </p>
         </div>
-        <Button onClick={() => router.push('/')} className="gap-2">
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">New Recipe</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => setShowGenerator(true)}
+            variant="outline"
+            className="gap-2"
+            disabled={pantryItems.length === 0}
+            title={pantryItems.length === 0 ? 'Add pantry items first' : 'Generate recipes from your pantry'}
+          >
+            <Wand2 className="h-4 w-4" />
+            <span className="hidden sm:inline">AI Recipes</span>
+          </Button>
+          <Button onClick={() => router.push('/')} className="gap-2">
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">New Recipe</span>
+          </Button>
+        </div>
       </div>
 
       {/* Filter tabs */}
@@ -79,6 +96,17 @@ export function RecipeBox() {
             >
               <Star className="h-3.5 w-3.5" />
               Favorites ({favoritesCount})
+            </button>
+          )}
+          {generatedCount > 0 && (
+            <button
+              onClick={() => setFilter('generated')}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                filter === 'generated' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              }`}
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+              AI Generated ({generatedCount})
             </button>
           )}
           {collections.map((col) => {
@@ -132,6 +160,9 @@ export function RecipeBox() {
           ))}
         </div>
       )}
+
+      {/* AI Recipe Generator */}
+      <PantryRecipeGenerator open={showGenerator} onOpenChange={setShowGenerator} />
     </div>
   );
 }

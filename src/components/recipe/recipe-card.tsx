@@ -1,7 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 
-import { Star, ListOrdered, AlertTriangle, ExternalLink, ChefHat, Clock } from 'lucide-react';
+import { Star, ListOrdered, AlertTriangle, ExternalLink, ChefHat, Clock, Wand2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,16 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
       {recipe.isFavorite && (
         <div className="absolute top-3 right-3 z-10">
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+        </div>
+      )}
+
+      {/* AI Generated badge */}
+      {recipe.id.startsWith('temp-pantry-') && (
+        <div className="absolute top-3 left-3 z-10">
+          <Badge variant="secondary" className="text-xs gap-1 bg-primary/10 text-primary">
+            <Wand2 className="h-3 w-3" />
+            AI
+          </Badge>
         </div>
       )}
 

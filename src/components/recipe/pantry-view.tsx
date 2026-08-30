@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Wand2 } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -30,7 +30,6 @@ import { useStore } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
-import { PantryRecipeGenerator } from './pantry-recipe-generator';
 
 interface PantryItem {
   id: string;
@@ -84,7 +83,6 @@ export function PantryView() {
   const { authToken, pantryItems, fetchPantry, addPantryItem, updatePantryItem, removePantryItem } = useStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [showRecipeGenerator, setShowRecipeGenerator] = useState(false);
   const [newName, setNewName] = useState('');
   const [newQuantity, setNewQuantity] = useState('');
   const [newExpiry, setNewExpiry] = useState('');
@@ -318,10 +316,6 @@ export function PantryView() {
           <p className="text-sm text-muted-foreground mt-1">{items.length} items tracked</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => setShowRecipeGenerator(true)} variant="outline" size="sm" className="gap-2" disabled={items.length === 0}>
-            <Wand2 className="h-4 w-4" />
-            <span className="hidden sm:inline">AI Recipes</span>
-          </Button>
           <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
             {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
           </Button>
@@ -705,9 +699,6 @@ export function PantryView() {
           )}
         </SheetContent>
       </Sheet>
-
-      {/* AI Recipe Generator */}
-      <PantryRecipeGenerator open={showRecipeGenerator} onOpenChange={setShowRecipeGenerator} />
     </div>
   );
 }

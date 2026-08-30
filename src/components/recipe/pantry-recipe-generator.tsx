@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, Loader2, X, RefreshCw, Wand2, Plus, ChefHat, Clock, Users } from 'lucide-react';
+import { Sparkles, Loader2, RefreshCw, Wand2, Plus, ChefHat, Clock, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -33,7 +33,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   const [loading, setLoading] = useState(false);
   const [recipes, setRecipes] = useState<TempRecipe[]>([]);
   const [hasGenerated, setHasGenerated] = useState(false);
-  const { authToken, addRecipe } = useStore();
+  const { authToken, addRecipe, recipes: storeRecipes } = useStore();
   const router = useRouter();
 
   async function generate() {
@@ -56,9 +56,17 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
       }
 
       const data = await response.json();
-      setRecipes(data.recipes || []);
+      const newRecipes: TempRecipe[] = data.recipes || [];
+
+      // Add ALL generated recipes to the store immediately so they appear
+      // in the recipe box and survive navigation.
+      for (const recipe of newRecipes) {
+        addRecipe(recipe as SavedRecipe);
+      }
+
+      setRecipes(newRecipes);
       setHasGenerated(true);
-      toast.success(`Generated ${data.recipes?.length || 0} recipes from your pantry!`);
+      toast.success(`Generated ${newRecipes.length} recipes! They're now in your recipe box.`);
     } catch (err) {
       toast.error('Could not generate recipes: ' + (err as Error).message);
     } finally {
@@ -67,15 +75,13 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   }
 
   function viewRecipe(recipe: TempRecipe) {
-    // Add to store so the recipe detail view can find it.
-    addRecipe(recipe as SavedRecipe);
+    // Recipe is already in the store (added during generate), so just navigate.
     onOpenChange(false);
     router.push(`/recipes/${recipe.id}`);
   }
 
   async function saveRecipe(recipe: TempRecipe) {
     try {
-      // Save to DB via the recipes API.
       const response = await fetch('/api/recipes', {
         method: 'POST',
         headers: {
@@ -97,12 +103,15 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
       if (!response.ok) throw new Error('Failed to save recipe.');
 
       const data = await response.json();
-      const savedRecipe = { ...recipe, id: data.recipe.id, _isTempPantryRecipe: false };
 
-      // Update the store: remove the temp recipe, add the real one.
-      addRecipe(savedRecipe as SavedRecipe);
+      // The recipe is already in the store with a temp ID.
+      // We need to replace it with the real ID.
+      // The store's addRecipe prepends, so we need to remove the temp one first.
+      // But we can't remove by temp ID easily — let's just add the new one.
+      // The recipe detail page will fetch by the real ID.
+      addRecipe({ ...recipe, id: data.recipe.id, _isTempPantryRecipe: false } as SavedRecipe);
 
-      // Update local state to show it's saved.
+      // Update local state.
       setRecipes((prev) =>
         prev.map((r) => (r.id === recipe.id ? { ...r, _isTempPantryRecipe: false, id: data.recipe.id } : r)),
       );
@@ -113,6 +122,9 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
     }
   }
 
+  // Count how many temp recipes are currently in the store.
+  const tempRecipesInStore = storeRecipes.filter((r) => r.id.startsWith('temp-pantry-'));
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
@@ -122,7 +134,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
             AI Recipe Creator
           </DialogTitle>
           <DialogDescription>
-            Generate high-quality recipes from your pantry ingredients.
+            Generate high-quality recipes from your pantry ingredients. Generated recipes appear in your recipe box temporarily — save the ones you love.
           </DialogDescription>
         </DialogHeader>
 
@@ -182,6 +194,11 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                 </>
               )}
             </Button>
+            {hasGenerated && !loading && (
+              <Button variant="outline" onClick={() => { onOpenChange(false); router.push('/recipes'); }} className="gap-2">
+                Go to Recipe Box
+              </Button>
+            )}
           </div>
 
           {loading && (
@@ -200,7 +217,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
           {!loading && recipes.length > 0 && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                {recipes.length} recipes generated. Tap <strong>View</strong> to see the full recipe and cook, or <strong>Add to Box</strong> to save it permanently.
+                {recipes.length} recipes generated and added to your recipe box. Tap <strong>View</strong> to cook, or <strong>Save</strong> to keep permanently.
               </p>
               {recipes.map((recipe, idx) => {
                 const servings = recipe.metadata?.find((m) => m.key.toLowerCase() === 'servings');
@@ -303,7 +320,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                             className="gap-1.5 flex-1"
                           >
                             <Plus className="h-3.5 w-3.5" />
-                            Add to Box
+                            Save to Box
                           </Button>
                         )}
                       </div>
@@ -331,6 +348,11 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                   ? 'The AI will use only what you have — no shopping required.'
                   : 'The AI will use your pantry as inspiration and may suggest 1-2 additions.'}
               </p>
+              {tempRecipesInStore.length > 0 && (
+                <p className="text-xs mt-3 text-amber-600">
+                  You have {tempRecipesInStore.length} unsaved generated recipe{tempRecipesInStore.length > 1 ? 's' : ''} in your recipe box.
+                </p>
+              )}
             </div>
           )}
         </div>

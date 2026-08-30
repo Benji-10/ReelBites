@@ -179,7 +179,7 @@ export async function POST(request: NextRequest) {
       model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
       generationConfig: {
         temperature: 0.7, // Higher temperature for creative recipe ideas.
-        maxOutputTokens: 16384, // Need a lot of tokens for 5 detailed recipes.
+        maxOutputTokens: 32768, // Increased — 5 detailed recipes need a lot of tokens.
         responseMimeType: 'application/json',
       },
     });
@@ -189,21 +189,126 @@ export async function POST(request: NextRequest) {
     const result = await model.generateContent(prompt);
     const text = result.response.text();
 
+    // Robust JSON parsing — Gemini sometimes returns extra text after the JSON
+    // or truncates it if maxOutputTokens is exceeded.
     let parsed: { recipes: GeneratedRecipeRaw[] };
+
+    // Strategy 1: Try direct parse.
     try {
       parsed = JSON.parse(text);
     } catch {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        parsed = JSON.parse(match[0]);
+      // Strategy 2: Try to extract the first valid JSON object using a brace-matching
+      // approach. This handles cases where Gemini appends text after the JSON.
+      const jsonStart = text.indexOf('{');
+      if (jsonStart === -1) {
+        throw new Error('Gemini response did not contain any JSON object.');
+      }
+
+      // Walk through the string counting braces to find the matching close.
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let jsonEnd = -1;
+
+      for (let i = jsonStart; i < text.length; i++) {
+        const char = text[i];
+
+        if (escape) {
+          escape = false;
+          continue;
+        }
+
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+
+        if (inString) continue;
+
+        if (char === '{') depth++;
+        else if (char === '}') {
+          depth--;
+          if (depth === 0) {
+            jsonEnd = i + 1;
+            break;
+          }
+        }
+      }
+
+      if (jsonEnd === -1) {
+        // Strategy 3: The JSON is likely truncated (hit maxOutputTokens).
+        // Try to repair it by closing all open braces/arrays.
+        console.warn('[pantry-recipes] JSON appears truncated, attempting repair...');
+
+        // Count unclosed braces and brackets
+        let openBraces = 0;
+        let openBrackets = 0;
+        let inStr = false;
+        let esc = false;
+
+        for (let i = jsonStart; i < text.length; i++) {
+          const char = text[i];
+          if (esc) { esc = false; continue; }
+          if (char === '\\') { esc = true; continue; }
+          if (char === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (char === '{') openBraces++;
+          else if (char === '}') openBraces--;
+          else if (char === '[') openBrackets++;
+          else if (char === ']') openBrackets--;
+        }
+
+        // Try to close everything. First, trim any trailing incomplete content.
+        let repaired = text.slice(jsonStart);
+
+        // Remove trailing incomplete string/property
+        // Find the last complete element (look for last comma at depth 1)
+        // This is heuristic — if it fails, we still have strategies below.
+
+        // Close open brackets and braces
+        for (let i = 0; i < openBrackets; i++) repaired += ']';
+        for (let i = 0; i < openBraces; i++) repaired += '}';
+
+        try {
+          parsed = JSON.parse(repaired);
+          console.log('[pantry-recipes] JSON repair succeeded — got', parsed.recipes?.length || 0, 'recipes.');
+        } catch (repairErr) {
+          console.error('[pantry-recipes] JSON repair failed:', repairErr);
+
+          // Strategy 4: Try to extract individual recipe objects from the truncated text.
+          // Look for { "title" patterns and extract what we can.
+          const recipeMatches = text.match(/\{\s*"title"\s*:[^}]*\}/g);
+          if (recipeMatches && recipeMatches.length > 0) {
+            console.warn(`[pantry-recipes] Extracted ${recipeMatches.length} partial recipe objects from truncated response.`);
+            // This won't have full data, but at least we can try.
+            throw new Error(
+              `Gemini response was truncated (got ${recipeMatches.length} partial recipes). ` +
+              `Try reducing the number of recipes or simplifying the prompt.`
+            );
+          }
+
+          throw new Error(
+            'Could not parse Gemini response as JSON. The response may have been truncated. ' +
+            `Response length: ${text.length} chars. First 200 chars: ${text.slice(0, 200)}`
+          );
+        }
       } else {
-        throw new Error('Could not parse Gemini response as JSON.');
+        // Found the matching close brace — extract just the JSON.
+        const jsonStr = text.slice(jsonStart, jsonEnd);
+        parsed = JSON.parse(jsonStr);
       }
     }
 
     if (!parsed.recipes || !Array.isArray(parsed.recipes) || parsed.recipes.length === 0) {
       throw new Error('Gemini did not return any recipes.');
     }
+
+    console.log(`[pantry-recipes] Successfully parsed ${parsed.recipes.length} recipes.`);
 
     // Canonicalize ALL ingredient names across all 5 recipes in ONE batch
     // (much more efficient than canonicalizing per-recipe).
