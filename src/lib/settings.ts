@@ -14,6 +14,7 @@
 import { create } from 'zustand';
 
 export type UnitPreference = 'metric' | 'imperial';
+export type InventoryDeduction = 'auto' | 'confirm' | 'none';
 type Theme = 'light' | 'dark';
 type ColorTheme = 'default' | 'mocha' | 'forest' | 'berry';
 
@@ -29,6 +30,8 @@ export interface UserSettings {
   temperature: UnitPreference;
   // Other settings
   defaultServings: number;
+  // Inventory deduction after cooking
+  inventoryDeduction: InventoryDeduction;
 }
 
 interface SettingsStore extends UserSettings {
@@ -49,6 +52,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   dry: 'metric',
   temperature: 'metric',
   defaultServings: 4,
+  inventoryDeduction: 'confirm',
 };
 
 const STORAGE_KEY = 'realbites-settings';
@@ -166,6 +170,7 @@ export const useSettings = create<SettingsStore>((set, get) => ({
         dry: get().dry,
         temperature: get().temperature,
         defaultServings: get().defaultServings,
+        inventoryDeduction: get().inventoryDeduction,
       };
       await fetch('/api/settings', {
         method: 'PUT',

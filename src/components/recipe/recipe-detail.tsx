@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, Trash2, Save, X, Plus, Pencil, ExternalLink,
   ChefHat, ListOrdered, Clock, Users, Minus, ChevronRight, Maximize2,
-  Star, Tag, FolderPlus, ChefHat as ChefIcon, Share2, Copy, Check,
+  Star, Tag, FolderPlus, ChefHat as ChefIcon, Share2, Copy, Check, Package,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +38,7 @@ import { CookingMode } from './cooking-mode';
 import { IngredientLink } from './ingredient-link';
 import { RecipeActions } from './recipe-actions';
 import { RecipePantryIntegration } from './recipe-pantry-integration';
+import { InventoryDeductionModal } from './inventory-deduction-modal';
 import { useSettings } from '@/lib/settings';
 
 // Returns the appropriate icon for a metadata key.
@@ -69,6 +70,7 @@ export function RecipeDetail() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cookingMode, setCookingMode] = useState(false);
+  const [showDeduction, setShowDeduction] = useState(false);
 
   const [editing, setEditing] = useState<Set<string>>(new Set());
   const [editTitle, setEditTitle] = useState('');
@@ -83,7 +85,7 @@ export function RecipeDetail() {
 
   // Recipe scaling state.
   const [scaleFactor, setScaleFactor] = useState(1);
-  const { smallLiquid, largeLiquid, weight, dry, temperature } = useSettings();
+  const { smallLiquid, largeLiquid, weight, dry, temperature, inventoryDeduction } = useSettings();
 
   const loadRecipe = useCallback(async () => {
     if (!recipeId) return;
@@ -374,6 +376,66 @@ export function RecipeDetail() {
       toast.error('Could not save: ' + (err as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Auto-deduct ingredients from pantry (for 'auto' inventory deduction mode).
+  // Matches recipe ingredients to pantry items and deducts the scaled amounts.
+  async function autoDeduct() {
+    if (!recipe?.ingredients || recipe.ingredients.length === 0) return;
+
+    const { pantryItems, authToken, fetchPantry } = useStore.getState();
+
+    // Match recipe ingredients to pantry items (same logic as the modal).
+    const deductions = recipe.ingredients
+      .map((ing) => {
+        const ingNameLower = ing.name.toLowerCase().trim();
+        const ingCanonical = ing.canonicalName?.toLowerCase().trim();
+        const match = pantryItems.find((p) => {
+          const pName = p.name.toLowerCase().trim();
+          const pGeneric = p.genericName?.toLowerCase().trim();
+          if (ingCanonical && pGeneric && ingCanonical === pGeneric) return true;
+          if (ingNameLower === pName || ingNameLower === pGeneric) return true;
+          if (ingNameLower.length > 3 && (pName.includes(ingNameLower) || ingNameLower.includes(pName))) return true;
+          return false;
+        });
+        if (!match) return null;
+        const amount = parseFloat(ing.amount || '0') * scaleFactor;
+        if (isNaN(amount) || amount <= 0) return null;
+        return {
+          pantryItemId: match.id,
+          deductAmount: amount,
+          deductUnit: ing.unit || '',
+          markAsUsedUp: false,
+        };
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+
+    if (deductions.length === 0) {
+      toast.info('No matching pantry items to deduct.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/pantry/deduct', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({ deductions }),
+      });
+
+      if (!response.ok) throw new Error('Failed to deduct ingredients.');
+      const data = await response.json();
+      await fetchPantry();
+
+      toast.success(
+        `Auto-deducted ${deductions.length} ingredient${deductions.length > 1 ? 's' : ''} from your pantry. ` +
+        `${data.deleted || 0} item${data.deleted === 1 ? '' : 's'} finished.`,
+      );
+    } catch (err) {
+      toast.error('Could not auto-deduct ingredients: ' + (err as Error).message);
     }
   }
 
@@ -734,16 +796,29 @@ export function RecipeDetail() {
             </CardTitle>
             <div className="flex items-center gap-1.5">
               {recipe.instructions && recipe.instructions.length > 0 && !editing.has('instructions') && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCookingMode(true)}
-                  className="gap-1.5"
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Cooking Mode</span>
-                  <span className="sm:hidden">Cook</span>
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCookingMode(true)}
+                    className="gap-1.5"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Cooking Mode</span>
+                    <span className="sm:hidden">Cook</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDeduction(true)}
+                    className="gap-1.5"
+                    title="Deduct used ingredients from your pantry"
+                  >
+                    <Package className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Deduct Pantry</span>
+                    <span className="sm:hidden">Deduct</span>
+                  </Button>
+                </>
               )}
               <EditButton
                 isEditing={editing.has('instructions')}
@@ -894,8 +969,29 @@ export function RecipeDetail() {
           instructions={recipe.instructions}
           ingredients={recipe.ingredients || []}
           title={recipe.title}
-          onClose={() => setCookingMode(false)}
+          onClose={() => {
+            setCookingMode(false);
+            // When cooking mode ends, trigger inventory deduction based on settings.
+            if (inventoryDeduction === 'auto' && recipe.ingredients) {
+              // Auto mode: deduct immediately without showing the modal.
+              autoDeduct();
+            } else if (inventoryDeduction === 'confirm') {
+              // Confirm mode: show the modal for review.
+              setShowDeduction(true);
+            }
+            // 'none' — do nothing.
+          }}
           scaleAmount={scaleAmount}
+        />
+      )}
+
+      {/* Inventory Deduction Modal */}
+      {showDeduction && recipe && (
+        <InventoryDeductionModal
+          open={showDeduction}
+          onOpenChange={setShowDeduction}
+          recipe={recipe}
+          scaleFactor={scaleFactor}
         />
       )}
     </div>

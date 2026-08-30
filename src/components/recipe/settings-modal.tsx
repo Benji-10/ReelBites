@@ -14,7 +14,7 @@ interface SettingsModalProps {
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const {
     smallLiquid, largeLiquid, weight, dry, temperature,
-    defaultServings, setSetting, setAllMetric, setAllImperial, loadFromStorage,
+    defaultServings, inventoryDeduction, setSetting, setAllMetric, setAllImperial, loadFromStorage,
   } = useSettings();
 
   useEffect(() => {
@@ -102,6 +102,38 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 +
               </Button>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Inventory Deduction</label>
+            <p className="text-xs text-muted-foreground">
+              What happens to your pantry when you cook a recipe?
+            </p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {([
+                { value: 'auto' as const, label: 'Auto', desc: 'Auto-deduct' },
+                { value: 'confirm' as const, label: 'Confirm', desc: 'Ask first' },
+                { value: 'none' as const, label: 'None', desc: 'Disabled' },
+              ]).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSetting('inventoryDeduction', opt.value)}
+                  className={`p-2.5 rounded-lg border-2 text-center transition-all ${
+                    inventoryDeduction === opt.value
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  <p className="text-sm font-medium">{opt.label}</p>
+                  <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {inventoryDeduction === 'auto' && 'Automatically deducts the recipe amounts from your pantry items. Best if you keep quantities accurate.'}
+              {inventoryDeduction === 'confirm' && 'Shows a review screen before deducting. You can edit amounts (e.g. if you used more or finished an item).'}
+              {inventoryDeduction === 'none' && 'No deduction prompts. For users who don\'t track pantry quantities.'}
+            </p>
           </div>
 
           <Button onClick={onClose} className="w-full">Done</Button>
