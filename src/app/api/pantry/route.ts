@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
-import { canonicalizeName, type CanonicalIngredient } from '@/lib/canonicalize';
+import { canonicalizeName, CURRENT_CANONICAL_VERSION, type CanonicalIngredient } from '@/lib/canonicalize';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -166,6 +166,7 @@ export async function POST(request: NextRequest) {
         canonicalAncestors: canonicalAncestors as never,
         canonicalAttributes: canonicalAttributes as never,
         canonicalHardAttributeKeys: canonicalHardAttributeKeys as never,
+        canonicalVersion: CURRENT_CANONICAL_VERSION,
         category,
         quantity: body.quantity || null,
         expiryDate: body.expiryDate ? new Date(body.expiryDate) : null,

@@ -27,6 +27,28 @@ export interface CanonicalIngredient {
   hardAttributeKeys: string[]; // which attribute keys are "hard" (blocking)
 }
 
+/**
+ * Current canonicalization prompt version.
+ *
+ * BUMP THIS NUMBER every time you change CANONICALIZATION_PROMPT.
+ * The backfill script uses this to determine which items need re-canonicalization:
+ *   - Items with canonicalVersion < CURRENT_CANONICAL_VERSION (or null) are re-processed.
+ *   - Items with canonicalVersion === CURRENT_CANONICAL_VERSION are skipped.
+ *
+ * This makes the backfill RESUMABLE — if it times out, re-running picks up
+ * exactly where it left off.
+ *
+ * Version history:
+ *   1: Initial flat canonicalization
+ *   2: Hierarchical with ancestors + attributes
+ *   3: Hard/soft attributes
+ *   4: IS-A ancestors only (no "dairy")
+ *   5: Cooking context (wraps, spray)
+ *   6: Given/changeable attributes (fresh, diced)
+ *   7: Array values for "or" alternatives
+ */
+export const CURRENT_CANONICAL_VERSION = 7;
+
 const CANONICALIZATION_PROMPT = `You are a Grocery Semantic Normalizer for a COOKING APPLICATION.
 
 Your output is used to match ingredients in RECIPES against items in a user's PANTRY. The matching is directional: a specific pantry item can satisfy a generic recipe need (e.g. recipe needs "noodles", pantry has "udon" → match), but not vice versa.

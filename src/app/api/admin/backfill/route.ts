@@ -6,35 +6,36 @@
  *   - Pantry items: genericName, canonicalAncestors, canonicalAttributes, canonicalHardAttributeKeys
  *   - Recipe ingredients: canonicalName, canonicalAncestors, canonicalAttributes, canonicalHardAttributeKeys
  *
+ * VERSION-BASED — RESUMABLE:
+ *   Each item has a `canonicalVersion` field. The backfill only processes items
+ *   where canonicalVersion != CURRENT_CANONICAL_VERSION (or is null). After
+ *   processing, it sets canonicalVersion = CURRENT_CANONICAL_VERSION.
+ *
+ *   This means: if the backfill times out, just re-run it. It will skip all
+ *   items that were already updated and continue from where it left off.
+ *
  * Usage:
- *   1. Backfill only items missing fields (default):
- *      GET /api/admin/backfill
+ *   GET /api/admin/backfill              — Backfill pantry + recipes (resumable)
+ *   GET /api/admin/backfill?scope=pantry — Only pantry
+ *   GET /api/admin/backfill?scope=recipes — Only recipes
  *
- *   2. Force re-canonicalize EVERYTHING (use after changing the Gemini prompt):
- *      GET /api/admin/backfill?force=1
- *
- *   3. Backfill only pantry (or only recipes):
- *      GET /api/admin/backfill?scope=pantry
- *      GET /api/admin/backfill?scope=recipes
+ * When to run:
+ *   - After deploying a build where the Gemini prompt changed (I'll bump
+ *     CURRENT_CANONICAL_VERSION in canonicalize.ts — the backfill will
+ *     automatically detect which items need updating).
+ *   - After running `prisma db push` to add the canonicalVersion column.
  *
  * Rate limiting:
  *   Gemini free tier allows 15 requests/min. This script waits 4.5s between
  *   API calls to stay under the limit. If a 429 is hit, it retries with
  *   exponential backoff (up to 3 retries).
  *
- * Progress logging:
- *   Every step is logged to the server console so you can watch progress
- *   in the Netlify function logs.
- *
  * No auth — admin script. Protect at network level or delete after use.
- * Idempotent: only updates items that need it (unless ?force=1).
- * Does NOT write fallback values — if Gemini fails, the item is skipped
- * so it can be retried on the next run.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { canonicalizeNames } from '@/lib/canonicalize';
+import { canonicalizeNames, CURRENT_CANONICAL_VERSION } from '@/lib/canonicalize';
 import type { RecipeIngredient } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -86,18 +87,17 @@ async function canonicalizeWithRetry(
 export async function GET(request: NextRequest) {
   const startTime = Date.now();
   const searchParams = request.nextUrl.searchParams;
-  const force = searchParams.get('force') === '1';
   const scope = searchParams.get('scope') || 'all';
 
   console.log('========================================');
-  console.log(`[backfill] START — force=${force}, scope=${scope}`);
+  console.log(`[backfill] START — scope=${scope}, target version=${CURRENT_CANONICAL_VERSION}`);
   console.log('========================================');
 
   const result = {
-    force,
     scope,
-    pantry: { total: 0, updated: 0, skipped: 0, failed: 0 },
-    recipes: { total: 0, updated: 0, skipped: 0, failed: 0 },
+    targetVersion: CURRENT_CANONICAL_VERSION,
+    pantry: { total: 0, needsUpdate: 0, updated: 0, skipped: 0, failed: 0 },
+    recipes: { total: 0, needsUpdate: 0, updated: 0, skipped: 0, failed: 0 },
     rateLimited: false,
     duration: '',
     nextSteps: [] as string[],
@@ -117,22 +117,19 @@ export async function GET(request: NextRequest) {
           canonicalAncestors: true,
           canonicalAttributes: true,
           canonicalHardAttributeKeys: true,
+          canonicalVersion: true,
         },
       });
       result.pantry.total = items.length;
       console.log(`[backfill:pantry] Found ${items.length} total pantry items.`);
 
+      // Only process items that don't have the current canonical version.
       const needsBackfill = items.filter((item) => {
-        if (force) return true;
-        return (
-          !item.genericName ||
-          !item.canonicalAncestors ||
-          !item.canonicalAttributes ||
-          item.canonicalHardAttributeKeys === null
-        );
+        return item.canonicalVersion !== CURRENT_CANONICAL_VERSION;
       });
 
-      console.log(`[backfill:pantry] ${needsBackfill.length} items need backfill, ${items.length - needsBackfill.length} already up to date.`);
+      result.pantry.needsUpdate = needsBackfill.length;
+      console.log(`[backfill:pantry] ${needsBackfill.length} items need update (version != ${CURRENT_CANONICAL_VERSION}), ${items.length - needsBackfill.length} already up to date.`);
 
       if (needsBackfill.length > 0) {
         const uniqueNames = Array.from(new Set(needsBackfill.map((i) => i.name).filter(Boolean)));
@@ -169,6 +166,7 @@ export async function GET(request: NextRequest) {
                   canonicalAncestors: ancestors as never,
                   canonicalAttributes: attributes as never,
                   canonicalHardAttributeKeys: hardKeys as never,
+                  canonicalVersion: CURRENT_CANONICAL_VERSION,
                 },
               });
               result.pantry.updated++;
@@ -187,7 +185,7 @@ export async function GET(request: NextRequest) {
         }
       } else {
         result.pantry.skipped = items.length;
-        console.log(`[backfill:pantry] ✅ All ${items.length} items already up to date — skipping.`);
+        console.log(`[backfill:pantry] ✅ All ${items.length} items already at version ${CURRENT_CANONICAL_VERSION} — skipping.`);
       }
     } catch (err) {
       console.error('[backfill:pantry] ❌ Pantry backfill failed:', err);
@@ -208,92 +206,99 @@ export async function GET(request: NextRequest) {
     console.log('[backfill:recipes] Phase 2 — Recipe ingredients');
     try {
       const recipes = await db.recipe.findMany({
-        select: { id: true, ingredients: true },
+        select: { id: true, ingredients: true, canonicalVersion: true },
       });
       result.recipes.total = recipes.length;
       console.log(`[backfill:recipes] Found ${recipes.length} total recipes.`);
 
-      let processed = 0;
-      for (const recipe of recipes) {
-        processed++;
-        const pct = Math.round((processed / recipes.length) * 100);
+      // Only process recipes that don't have the current canonical version.
+      const needsBackfill = recipes.filter((recipe) => {
+        return recipe.canonicalVersion !== CURRENT_CANONICAL_VERSION;
+      });
 
-        try {
-          const ingredients = recipe.ingredients as RecipeIngredient[];
-          if (!Array.isArray(ingredients) || ingredients.length === 0) {
-            result.recipes.skipped++;
-            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: no ingredients, skipped.`);
-            continue;
-          }
+      result.recipes.needsUpdate = needsBackfill.length;
+      console.log(`[backfill:recipes] ${needsBackfill.length} recipes need update, ${recipes.length - needsBackfill.length} already up to date.`);
 
-          const needsBackfill = force || ingredients.some(
-            (ing) => !ing.canonicalName ||
-              ing.canonicalAncestors === undefined ||
-              ing.canonicalAttributes === undefined ||
-              ing.canonicalHardAttributeKeys === undefined,
-          );
+      if (needsBackfill.length === 0) {
+        result.recipes.skipped = recipes.length;
+        console.log(`[backfill:recipes] ✅ All ${recipes.length} recipes already at version ${CURRENT_CANONICAL_VERSION} — skipping.`);
+      } else {
+        let processed = 0;
+        let rateLimited = false;
 
-          if (!needsBackfill) {
-            result.recipes.skipped++;
-            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: already canonicalized, skipped.`);
-            continue;
-          }
+        for (const recipe of needsBackfill) {
+          processed++;
+          const pct = Math.round((processed / needsBackfill.length) * 100);
 
-          const namesToCanonicalize = force
-            ? ingredients.map((ing) => ing.name)
-            : ingredients
-                .filter((ing) => !ing.canonicalName)
-                .map((ing) => ing.name);
-
-          if (namesToCanonicalize.length === 0) {
-            result.recipes.skipped++;
-            continue;
-          }
-
-          const uniqueNames = Array.from(new Set(namesToCanonicalize.filter(Boolean)));
-          console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: canonicalizing ${uniqueNames.length} ingredient(s)...`);
-
-          // Rate-limit: wait before each recipe's API call.
-          await sleep(RATE_LIMIT_DELAY_MS);
-
-          const canonicalMap = await canonicalizeWithRetry(uniqueNames, `recipe-${processed}`);
-
-          if (canonicalMap === null) {
-            result.rateLimited = true;
-            result.recipes.failed++;
-            result.nextSteps.push(`Recipe "${recipe.id}": rate limited. Re-run to retry.`);
-            console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Rate limited. Stopping recipe phase.`);
-            // Stop processing more recipes — we're rate limited.
-            result.recipes.skipped += recipes.length - processed;
-            break;
-          }
-
-          const updatedIngredients = ingredients.map((ing) => {
-            const c = canonicalMap.get(ing.name);
-            if (c) {
-              return {
-                ...ing,
-                canonicalName: c.canonical_name,
-                canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
-                canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
-                canonicalHardAttributeKeys: c.hardAttributeKeys.length > 0 ? c.hardAttributeKeys : null,
-              };
+          try {
+            const ingredients = recipe.ingredients as RecipeIngredient[];
+            if (!Array.isArray(ingredients) || ingredients.length === 0) {
+              // Even if no ingredients, mark as updated so we don't keep trying.
+              await db.recipe.update({
+                where: { id: recipe.id },
+                data: { canonicalVersion: CURRENT_CANONICAL_VERSION },
+              });
+              result.recipes.updated++;
+              console.log(`[backfill:recipes]   ${processed}/${needsBackfill.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: no ingredients, marked as done.`);
+              continue;
             }
-            return ing;
-          });
 
-          await db.recipe.update({
-            where: { id: recipe.id },
-            data: { ingredients: updatedIngredients as never },
-          });
-          result.recipes.updated++;
-          console.log(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ✅ Updated.`);
-        } catch (err) {
-          console.error(`[backfill:recipes]   ${processed}/${recipes.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Failed:`, err);
-          result.recipes.failed++;
+            // Canonicalize ALL ingredients (since the prompt changed).
+            const namesToCanonicalize = ingredients.map((ing) => ing.name);
+            const uniqueNames = Array.from(new Set(namesToCanonicalize.filter(Boolean)));
+            console.log(`[backfill:recipes]   ${processed}/${needsBackfill.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: canonicalizing ${uniqueNames.length} ingredient(s)...`);
+
+            // Rate-limit: wait before each recipe's API call.
+            await sleep(RATE_LIMIT_DELAY_MS);
+
+            const canonicalMap = await canonicalizeWithRetry(uniqueNames, `recipe-${processed}`);
+
+            if (canonicalMap === null) {
+              result.rateLimited = true;
+              result.recipes.failed++;
+              result.nextSteps.push(`Recipe "${recipe.id}": rate limited. Re-run to retry.`);
+              console.log(`[backfill:recipes]   ${processed}/${needsBackfill.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Rate limited. Stopping recipe phase.`);
+              rateLimited = true;
+              break;
+            }
+
+            const updatedIngredients = ingredients.map((ing) => {
+              const c = canonicalMap.get(ing.name);
+              if (c) {
+                return {
+                  ...ing,
+                  canonicalName: c.canonical_name,
+                  canonicalAncestors: c.ancestors.length > 0 ? c.ancestors : null,
+                  canonicalAttributes: Object.keys(c.attributes).length > 0 ? c.attributes : null,
+                  canonicalHardAttributeKeys: c.hardAttributeKeys.length > 0 ? c.hardAttributeKeys : null,
+                };
+              }
+              return ing;
+            });
+
+            await db.recipe.update({
+              where: { id: recipe.id },
+              data: {
+                ingredients: updatedIngredients as never,
+                canonicalVersion: CURRENT_CANONICAL_VERSION,
+              },
+            });
+            result.recipes.updated++;
+            console.log(`[backfill:recipes]   ${processed}/${needsBackfill.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ✅ Updated.`);
+          } catch (err) {
+            console.error(`[backfill:recipes]   ${processed}/${needsBackfill.length} (${pct}%) — recipe ${recipe.id.slice(-8)}: ❌ Failed:`, err);
+            result.recipes.failed++;
+          }
+        }
+
+        // Count remaining as skipped (not processed due to rate limit or timeout).
+        result.recipes.skipped = needsBackfill.length - processed;
+        console.log(`[backfill:recipes] ✅ Done. Updated ${result.recipes.updated}, skipped ${result.recipes.skipped} (not yet processed), failed ${result.recipes.failed}.`);
+
+        if (rateLimited || result.recipes.skipped > 0) {
+          console.log(`[backfill:recipes] ⏳ ${result.recipes.skipped} recipes were not processed. Re-run the backfill to continue.`);
         }
       }
-      console.log(`[backfill:recipes] ✅ Done. Updated ${result.recipes.updated}, skipped ${result.recipes.skipped}, failed ${result.recipes.failed}.`);
     } catch (err) {
       console.error('[backfill:recipes] ❌ Recipe backfill failed:', err);
       result.recipes.failed++;
@@ -304,19 +309,25 @@ export async function GET(request: NextRequest) {
 
   console.log('========================================');
   console.log(`[backfill] COMPLETE — ${result.duration}`);
-  console.log(`[backfill] Pantry:  ${result.pantry.updated} updated, ${result.pantry.skipped} skipped, ${result.pantry.failed} failed (of ${result.pantry.total})`);
-  console.log(`[backfill] Recipes: ${result.recipes.updated} updated, ${result.recipes.skipped} skipped, ${result.recipes.failed} failed (of ${result.recipes.total})`);
+  console.log(`[backfill] Pantry:  ${result.pantry.updated} updated, ${result.pantry.skipped} already done, ${result.pantry.failed} failed (of ${result.pantry.total}, ${result.pantry.needsUpdate} needed update)`);
+  console.log(`[backfill] Recipes: ${result.recipes.updated} updated, ${result.recipes.skipped} remaining, ${result.recipes.failed} failed (of ${result.recipes.total}, ${result.recipes.needsUpdate} needed update)`);
+  if (result.recipes.skipped > 0 || result.pantry.failed > 0) {
+    console.log(`[backfill] ⏳ Re-run to continue — ${result.recipes.skipped} recipes + ${result.pantry.failed} pantry items still need processing.`);
+  }
   console.log('========================================');
 
   // Generate next steps.
   if (result.rateLimited) {
-    result.nextSteps.unshift('⏳ Rate limited by Gemini. Wait 1 minute, then re-run the same command. Items that failed will be retried automatically.');
+    result.nextSteps.unshift('⏳ Rate limited by Gemini. Wait 1 minute, then re-run the same command. It will skip items already updated and continue from where it left off.');
   }
-  if (result.pantry.failed === 0 && result.recipes.failed === 0 && !result.rateLimited) {
-    result.nextSteps.push('✅ All done! No items need backfilling.');
+  if (result.recipes.skipped > 0) {
+    result.nextSteps.push(`📋 ${result.recipes.skipped} recipes were not processed (timeout or rate limit). Re-run to continue.`);
   }
-  if (force) {
-    result.nextSteps.push('Force mode was used — all items were re-canonicalized.');
+  if (result.pantry.failed > 0) {
+    result.nextSteps.push(`📋 ${result.pantry.failed} pantry items failed. Re-run to retry.`);
+  }
+  if (result.recipes.skipped === 0 && result.pantry.failed === 0 && result.recipes.failed === 0 && !result.rateLimited) {
+    result.nextSteps.push('✅ All done! All items are at the current canonical version.');
   }
 
   return NextResponse.json({

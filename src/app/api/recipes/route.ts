@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb, migrateGuestRecipes } from '@/lib/auth';
-import { canonicalizeNames } from '@/lib/canonicalize';
+import { canonicalizeNames, CURRENT_CANONICAL_VERSION } from '@/lib/canonicalize';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -132,6 +132,7 @@ export async function POST(request: NextRequest) {
         isFavorite: body.isFavorite || false,
         tags: (body.tags || null) as never,
         collection: body.collection || null,
+        canonicalVersion: CURRENT_CANONICAL_VERSION,
       },
     });
 

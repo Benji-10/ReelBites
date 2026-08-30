@@ -63,6 +63,11 @@ model Recipe {
   tags        Json?    // JSON array of strings: ["quick", "vegetarian", ...]
   collection  String?  // Custom collection name: "Friday cooking", "Fakeaways", etc.
 
+  // Canonicalization version — tracks which prompt version was used for the
+  // ingredients' canonical data. Matches CURRENT_CANONICAL_VERSION in canonicalize.ts.
+  // Used by the backfill script to know which recipes need re-canonicalization.
+  canonicalVersion Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -83,6 +88,7 @@ model PantryItem {
   canonicalAncestors  Json?  // Array of ancestor TYPES (IS-A), e.g. ["wheat noodles", "noodles"]
   canonicalAttributes Json?  // Object of attributes, e.g. {"color": "red", "state": "dry"}
   canonicalHardAttributeKeys Json?  // Array of attribute keys that are "hard" (blocking for matching)
+  canonicalVersion    Int?    // Which prompt version was used (matches CURRENT_CANONICAL_VERSION in canonicalize.ts)
   category      String?  // e.g. "Produce", "Dairy", "Meat & Fish"
   quantity      String?  // e.g. "2", "500g", "1 box"
   expiryDate    DateTime?

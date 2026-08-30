@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
-import { canonicalizeNames } from '@/lib/canonicalize';
+import { canonicalizeNames, CURRENT_CANONICAL_VERSION } from '@/lib/canonicalize';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -111,6 +111,8 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
           return ing;
         });
       }
+      // Mark the recipe as having the current canonical version.
+      data.canonicalVersion = CURRENT_CANONICAL_VERSION;
     }
 
     const updated = await db.recipe.update({
