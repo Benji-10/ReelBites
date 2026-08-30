@@ -160,11 +160,15 @@ export async function downloadVideo(
 /**
  * Extract the audio track from a video using ffmpeg.wasm.
  * After extraction, the ffmpeg instance is terminated to free WASM memory.
+ *
+ * Returns null if the video has no audio stream (some Instagram reels
+ * are video-only with no sound). The caller should handle this by
+ * proceeding without a transcript.
  */
 export async function extractAudio(
   videoData: Uint8Array,
   onProgress?: (message: string) => void,
-): Promise<{ audioBase64: string; audioSize: number }> {
+): Promise<{ audioBase64: string; audioSize: number } | null> {
   console.log('[extractAudio] Starting', {
     videoDataLength: videoData.length,
     isDetached: isDetached(videoData),
@@ -178,7 +182,17 @@ export async function extractAudio(
   onProgress?.('Writing video to ffmpeg...');
   await ffmpeg.writeFile('input.mp4', videoCopy);
 
+  // ---- Probe: check if the video has an audio stream ----
+  // ffmpeg.wasm doesn't have a direct "probe" API, but we can capture
+  // the log output during exec and look for stream info.
+  const ffmpegLogs: string[] = [];
+  const logHandler = ({ message }: { message: string }) => {
+    ffmpegLogs.push(message);
+  };
+  ffmpeg.on('log', logHandler);
+
   onProgress?.('Extracting audio (16kHz mono MP3)...');
+  let execSucceeded = false;
   try {
     await ffmpeg.exec([
       '-i', 'input.mp4',
@@ -189,16 +203,52 @@ export async function extractAudio(
       '-b:a', '32k',
       'output.mp3',
     ]);
+    execSucceeded = true;
   } catch (err) {
     console.error('[extractAudio] exec failed:', err);
+    console.error('[extractAudio] ffmpeg logs:', ffmpegLogs.join('\n'));
+  }
+
+  ffmpeg.off('log', logHandler);
+
+  // ---- Check for "no audio stream" in the logs ----
+  // ffmpeg outputs "Output file #0 does not contain any stream" when the
+  // input video has no audio track. This is not an error — we just skip
+  // transcription and proceed with caption + comments + OCR.
+  const logsText = ffmpegLogs.join('\n');
+  const hasNoAudioStream =
+    logsText.includes('Output file #0 does not contain any stream') ||
+    logsText.includes('does not contain any stream');
+
+  if (hasNoAudioStream) {
+    console.log('[extractAudio] Video has no audio stream — proceeding without transcript.');
+    onProgress?.('No audio track in this video — skipping transcription.');
+
+    // Clean up.
+    try {
+      await ffmpeg.deleteFile('input.mp4');
+      await ffmpeg.deleteFile('output.mp3');
+    } catch {}
+
+    await resetFfmpeg();
+    return null;
+  }
+
+  // ---- If exec failed for another reason, check if output exists anyway ----
+  if (!execSucceeded) {
     try {
       const data = await ffmpeg.readFile('output.mp3');
       if (!data || (data as Uint8Array).length === 0) {
-        throw err;
+        // Real failure — provide a detailed error with logs.
+        const lastLogs = ffmpegLogs.slice(-10).join('\n');
+        throw new Error(
+          `ffmpeg audio extraction failed. Last ffmpeg logs:\n${lastLogs}`,
+        );
       }
-      console.log('[extractAudio] Output exists despite error');
-    } catch {
-      throw new Error(`ffmpeg audio extraction failed: ${(err as Error).message}`);
+      console.log('[extractAudio] Output exists despite exec error');
+    } catch (err) {
+      await resetFfmpeg();
+      throw err;
     }
   }
 
@@ -211,6 +261,15 @@ export async function extractAudio(
   } catch {}
 
   const rawAudio = audioData as Uint8Array;
+
+  if (rawAudio.length === 0) {
+    await resetFfmpeg();
+    throw new Error(
+      'ffmpeg produced an empty audio file. The video may have no audio stream. ' +
+      'Last ffmpeg logs:\n' + ffmpegLogs.slice(-10).join('\n'),
+    );
+  }
+
   const audioBytes = new Uint8Array(rawAudio.length);
   audioBytes.set(rawAudio);
 

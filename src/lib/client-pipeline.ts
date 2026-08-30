@@ -158,52 +158,108 @@ export async function runClientPipeline(
   }
 
   // Step 3: Extract audio with ffmpeg.wasm (client-side).
+  // Returns null if the video has no audio stream (some reels are silent or
+  // the scraper returned a video-only DASH segment).
+  // If the first URL has no audio, try alternative URLs from the scraper.
   onProgress({
     step: 'audio',
     message: 'Extracting audio track...',
     progress: 35,
   });
 
-  const { audioBase64 } = await extractAudio(videoData, (msg) =>
+  let audioResult = await extractAudio(videoData, (msg) =>
     onProgress({ step: 'audio', message: msg, progress: 45 }),
   );
 
-  // Step 4: Transcribe audio via server API (Whisper).
-  onProgress({
-    step: 'whisper',
-    message: 'Uploading audio for transcription...',
-    progress: 50,
-  });
+  // If no audio was found AND we have alternative URLs, try them.
+  if (audioResult === null && post.videoUrls && post.videoUrls.length > 1) {
+    console.log('[pipeline] First video URL had no audio. Trying alternative URLs...');
+    onProgress({
+      step: 'audio',
+      message: `No audio in first video. Trying ${post.videoUrls.length - 1} alternative URL(s)...`,
+      progress: 45,
+    });
 
-  const transcribeResponse = await fetch('/api/transcribe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audio: audioBase64, mimeType: 'audio/mpeg' }),
-  });
+    for (let i = 1; i < post.videoUrls.length; i++) {
+      const altUrl = post.videoUrls[i];
+      console.log(`[pipeline] Trying alternative URL ${i + 1}/${post.videoUrls.length}:`, altUrl.slice(0, 100));
 
-  if (!transcribeResponse.ok) {
-    const errorData = await transcribeResponse.json().catch(() => ({ error: 'Transcription failed.' }));
-    // Include debug info in the error message if available.
-    let errorMessage = errorData.error || `Transcription failed: HTTP ${transcribeResponse.status}`;
-    if (errorData.hint) {
-      errorMessage += `\n\nHint: ${errorData.hint}`;
+      try {
+        onProgress({
+          step: 'audio',
+          message: `Trying alternative video URL ${i + 1}/${post.videoUrls.length}...`,
+          progress: 45,
+        });
+
+        const altVideoData = await downloadVideo(altUrl, (msg) =>
+          onProgress({ step: 'download', message: msg, progress: 48 }),
+        );
+
+        audioResult = await extractAudio(altVideoData, (msg) =>
+          onProgress({ step: 'audio', message: msg, progress: 50 }),
+        );
+
+        if (audioResult !== null) {
+          console.log(`[pipeline] Alternative URL ${i + 1} has audio! Using it.`);
+          // Use this video data for frame extraction too.
+          videoData = altVideoData;
+          break;
+        }
+
+        console.log(`[pipeline] Alternative URL ${i + 1} also has no audio.`);
+      } catch (err) {
+        console.warn(`[pipeline] Alternative URL ${i + 1} failed:`, err);
+      }
     }
-    if (errorData.debug && Array.isArray(errorData.debug)) {
-      const debugSummary = errorData.debug
-        .map((d: { step: string; message: string }) => `[${d.step}] ${d.message}`)
-        .join('\n');
-      errorMessage += `\n\nDebug log:\n${debugSummary}`;
-    }
-    throw new Error(errorMessage);
   }
 
-  const { transcript } = (await transcribeResponse.json()) as { transcript: string };
+  let transcript = '';
 
-  onProgress({
-    step: 'whisper',
-    message: `Transcription complete (${transcript.length} chars).`,
-    progress: 60,
-  });
+  if (audioResult === null) {
+    // No audio stream — skip transcription.
+    onProgress({
+      step: 'whisper',
+      message: 'No audio in this reel — proceeding with caption + comments only.',
+      progress: 55,
+    });
+  } else {
+    // Step 4: Transcribe audio via server API (Whisper).
+    onProgress({
+      step: 'whisper',
+      message: 'Uploading audio for transcription...',
+      progress: 50,
+    });
+
+    const transcribeResponse = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: audioResult.audioBase64, mimeType: 'audio/mpeg' }),
+    });
+
+    if (!transcribeResponse.ok) {
+      const errorData = await transcribeResponse.json().catch(() => ({ error: 'Transcription failed.' }));
+      let errorMessage = errorData.error || `Transcription failed: HTTP ${transcribeResponse.status}`;
+      if (errorData.hint) {
+        errorMessage += `\n\nHint: ${errorData.hint}`;
+      }
+      if (errorData.debug && Array.isArray(errorData.debug)) {
+        const debugSummary = errorData.debug
+          .map((d: { step: string; message: string }) => `[${d.step}] ${d.message}`)
+          .join('\n');
+        errorMessage += `\n\nDebug log:\n${debugSummary}`;
+      }
+      throw new Error(errorMessage);
+    }
+
+    const transcribeData = (await transcribeResponse.json()) as { transcript: string };
+    transcript = transcribeData.transcript;
+
+    onProgress({
+      step: 'whisper',
+      message: `Transcription complete (${transcript.length} chars).`,
+      progress: 60,
+    });
+  }
 
   // Step 5: Generate recipe via Gemini — WITHOUT OCR first.
   // Most recipe reels have the recipe in the caption, transcript, or author

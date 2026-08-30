@@ -100,7 +100,11 @@ interface ApifyReelResult {
   videoURL?: string | null;
   video_url?: string | null;
   videoDownloadUrl?: string | null;
+  videoUrls?: string[] | null; // some actors return multiple quality URLs
+  videoVariants?: Array<{ url?: string; width?: number; height?: number }> | null;
   displayUrl?: string | null;
+  thumbnailUrl?: string | null;
+  imageUrl?: string | null;
   videoDuration?: number;
   likesCount?: number;
   views?: number;
@@ -121,26 +125,73 @@ interface ApifyReelResult {
   // Error fields (if the actor couldn't scrape the URL):
   error?: string;
   errorDescription?: string;
+  // Allow any additional fields we haven't explicitly listed.
+  [key: string]: unknown;
 }
 
 /**
- * Extract the video URL from an Apify result item.
- * Checks multiple field name variants for cross-actor compatibility.
+ * Extract ALL video URLs from an Apify result item.
+ * Checks multiple field name variants and arrays for cross-actor compatibility.
+ * Returns URLs in priority order: "download" URLs first (more likely to have audio),
+ * then other URLs.
  */
-function extractVideoUrl(item: ApifyReelResult): string | null {
-  const directFields = [
-    'videoUrl',
-    'videoURL',
-    'video_url',
-    'videoDownloadUrl',
-  ] as const;
-  for (const field of directFields) {
-    const value = item[field];
-    if (typeof value === 'string' && value.startsWith('http')) {
-      return value;
+function extractAllVideoUrls(item: ApifyReelResult): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  function addUrl(url: unknown) {
+    if (typeof url === 'string' && url.startsWith('http') && !seen.has(url)) {
+      urls.push(url);
+      seen.add(url);
     }
   }
-  return null;
+
+  // 1. "Download" URLs — most likely to contain the full video with audio.
+  addUrl(item.videoDownloadUrl);
+  addUrl(item.video_download_url);
+
+  // 2. Array of URLs (some actors return multiple quality versions).
+  if (Array.isArray(item.videoUrls)) {
+    for (const u of item.videoUrls) addUrl(u);
+  }
+  if (Array.isArray(item.video_urls)) {
+    for (const u of item.video_urls) addUrl(u);
+  }
+
+  // 3. Video variants array (objects with url field).
+  if (Array.isArray(item.videoVariants)) {
+    for (const v of item.videoVariants) {
+      if (v && typeof v === 'object' && 'url' in v) addUrl(v.url);
+    }
+  }
+
+  // 4. Standard single-URL fields.
+  addUrl(item.videoUrl);
+  addUrl(item.videoURL);
+  addUrl(item.video_url);
+
+  // 5. Also check for any field that contains "video" and "url" in the key.
+  for (const [key, value] of Object.entries(item)) {
+    if (key.toLowerCase().includes('video') && key.toLowerCase().includes('url')) {
+      if (Array.isArray(value)) {
+        for (const v of value) addUrl(v);
+      } else {
+        addUrl(value);
+      }
+    }
+  }
+
+  return urls;
+}
+
+/**
+ * Extract the best video URL from an Apify result item.
+ * Prefers "download" URLs (more likely to contain audio) over "play" URLs.
+ * Kept for backward compatibility.
+ */
+function extractVideoUrl(item: ApifyReelResult): string | null {
+  const urls = extractAllVideoUrls(item);
+  return urls.length > 0 ? urls[0] : null;
 }
 
 /**
@@ -447,13 +498,26 @@ export async function scrapeInstagramPost(
   }
 
   // Extract data using robust field detection.
-  const videoUrl = extractVideoUrl(result);
+  const allVideoUrls = extractAllVideoUrls(result);
+  const videoUrl = allVideoUrls[0] || null;
   const thumbnailUrl = extractThumbnailUrl(result);
   const caption = result.caption || null;
 
   // Comments are fetched separately via /api/comments to avoid 504 timeouts.
   // We pass an empty array here — the client will populate it.
   const topComments: InstagramComment[] = [];
+
+  // Log ALL video URLs for debugging.
+  console.log('[Apify] All video URLs found:', allVideoUrls.length);
+  allVideoUrls.forEach((url, i) => {
+    console.log(`[Apify]   URL ${i + 1}: ${url.slice(0, 120)}...`);
+  });
+
+  // Log all field names that contain "video" for debugging.
+  const videoFields = Object.entries(result)
+    .filter(([key]) => key.toLowerCase().includes('video'))
+    .map(([key, value]) => `${key}=${typeof value === 'string' ? value.slice(0, 80) + '...' : JSON.stringify(value)?.slice(0, 80) + '...'}`);
+  console.log('[Apify] Video-related fields:', videoFields);
 
   // If we still don't have a video URL, throw a detailed error.
   if (!videoUrl) {
@@ -485,6 +549,7 @@ export async function scrapeInstagramPost(
 
   return {
     videoUrl,
+    videoUrls: allVideoUrls, // Pass all URLs so the client can try alternatives.
     caption,
     comments: topComments,
     thumbnailUrl,

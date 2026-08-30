@@ -109,28 +109,63 @@ A request for "wrap" will NOT match "bread" (different cooking uses, no shared a
 
 ## Attributes — HARD vs SOFT (cooking context)
 
-For EACH attribute, decide HARD or SOFT based on whether substituting would change the dish:
+For EACH attribute, decide HARD or SOFT based on whether substituting would change the dish.
 
-HARD: The substitution would materially change the dish's flavor, texture, or cooking behavior.
-- "form" for aromatics: garlic powder ≠ fresh garlic ≠ garlic paste (very different in cooking)
-- "form" for herbs: dried basil ≠ fresh basil (different potency)
-- "color" for onions: red onion ≠ white onion (different flavor — pungent vs sweet)
-- "state" for produce: fresh tomatoes ≠ sun-dried tomatoes (different texture/flavor)
-- "source" for oils/vinegars: olive oil ≠ avocado oil ≠ sesame oil (different flavor, different smoke point)
+### "GIVEN" attributes — DO NOT INCLUDE THESE
 
-SOFT: The substitution is acceptable for cooking purposes.
-- "diet": low carb wrap ≈ regular wrap, gluten-free pasta ≈ regular pasta (cook's dietary choice)
-- "brand": Kewpie mayo ≈ Heinz mayo (doesn't affect recipe)
-- "form" for oils/sauces: spray oil ≈ regular oil (same ingredient, different delivery)
-- "form" for solid fats: butter sticks ≈ spreadable butter (same thing)
-- "color" for mild vegetables: red capsicum ≈ green capsicum (similar enough for most recipes)
-- "fat content" for dairy: light cream ≈ regular cream, light butter ≈ regular butter
-- "variety" for potatoes: russet ≈ yukon gold (interchangeable in most recipes)
-- "packaging": canned ≈ jarred ≈ fresh (if the ingredient itself is the same)
-- "source" for milk: oat milk ≈ soy milk (lean SOFT — both work as milk in recipes)
+Some attributes are the DEFAULT state and would never be mentioned in a recipe. Do NOT include them as attributes at all:
+- "state: fresh" for produce/meat/dairy (fresh is the default — a recipe saying "chicken" implies fresh chicken)
+- "state: raw" for meats (raw is the default — you cook it)
+- "form: whole" for most items (whole is the default)
+- "state: liquid" for oils/milk/water (liquid is the default)
 
-CONTEXT MATTERS — the same attribute can be HARD for one ingredient and SOFT for another:
-- "form" is HARD for garlic (powder ≠ fresh) but SOFT for oil (spray ≈ liquid)
+Only include a "state" or "form" attribute when it's NOT the default:
+- "garlic powder" → state: dry, form: powder (dry powder is NOT the default for garlic)
+- "sun-dried tomatoes" → state: sun-dried (NOT the default)
+- "frozen peas" → state: frozen (frozen is NOT the default)
+- "canned beans" → packaging: canned (NOT the default)
+
+If a recipe just says "chicken breast", it has NO attributes — not {state: fresh}. Fresh is implied.
+
+### "CHANGEABLE" attributes — ALWAYS SOFT
+
+Some attributes describe prep states that the COOK can change at home. These are ALWAYS SOFT:
+- "form: diced" / "form: chopped" / "form: sliced" / "form: minced" / "form: grated" / "form: crushed"
+  (The cook can dice/chop/slice/mince/grate/crush the ingredient themselves.)
+- "preparation: peeled" (The cook can peel it.)
+- "preparation: washed" (The cook can wash it.)
+
+Example: "diced onions" → canonical_name: "onion", attributes: {form: "diced"}, hardAttributeKeys: []
+(The recipe can use any onion — the cook will dice it themselves.)
+
+### TRULY HARD attributes
+
+These CANNOT be changed by the cook at home and represent fundamentally different products:
+- "form: powder" for aromatics (garlic powder ≠ fresh garlic — can't make powder at home)
+- "form: paste" (garlic paste ≠ fresh garlic — different product)
+- "state: dry" for herbs (dried basil ≠ fresh basil — different potency, can't easily dry at home)
+- "state: sun-dried" (sun-dried tomatoes ≠ fresh — completely different product)
+- "color" for onions (red onion ≠ white onion — can't change the color, different flavor)
+- "source" for oils (olive oil ≠ avocado oil — different flavor, different smoke point)
+- "source" for vinegars (rice vinegar ≠ balsamic — different flavor)
+
+### SOFT attributes
+
+These don't materially change the dish:
+- "diet": low carb wrap ≈ regular wrap, gluten-free pasta ≈ regular pasta
+- "brand": Kewpie mayo ≈ Heinz mayo
+- "form" for oils/sauces: spray oil ≈ regular oil
+- "form" for solid fats: butter sticks ≈ spreadable butter
+- "color" for mild vegetables: red capsicum ≈ green capsicum
+- "fat content" for dairy: light cream ≈ regular cream
+- "variety" for potatoes: russet ≈ yukon gold
+- "packaging" (unless it changes the product): canned ≈ jarred
+- "source" for milk: oat milk ≈ soy milk (lean SOFT)
+
+### CONTEXT MATTERS
+
+The same attribute can be HARD for one ingredient and SOFT for another:
+- "form" is HARD for garlic (powder ≠ fresh) but SOFT for oil (spray ≈ liquid) and SOFT for onions (diced ≈ whole)
 - "color" is HARD for onions (red ≠ white) but SOFT for bell peppers (red ≈ green)
 - "source" is HARD for oils (olive ≠ avocado) but SOFT for milk (oat ≈ soy)
 
@@ -149,11 +184,20 @@ Olive Oil → {"canonical_name": "olive oil", "ancestors": ["oil"], "attributes"
 Oil → {"canonical_name": "oil", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
 
 Garlic Powder → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "dry", "form": "powder"}, "hardAttributeKeys": ["state", "form"]}
-Fresh Garlic → {"canonical_name": "garlic", "ancestors": [], "attributes": {"state": "fresh"}, "hardAttributeKeys": ["state"]}
+Fresh Garlic → {"canonical_name": "garlic", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+(Garlic powder is HARD: can't make powder at home. Fresh garlic has NO attributes — fresh is the default/given state.)
+
+Diced Onions → {"canonical_name": "onion", "ancestors": [], "attributes": {"form": "diced"}, "hardAttributeKeys": []}
+(Diced is SOFT: the cook can dice it themselves.)
 
 Red Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": ["color"]}
 Yellow Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {"color": "yellow"}, "hardAttributeKeys": ["color"]}
 Onion → {"canonical_name": "onion", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
+
+Chicken Breast (fresh) → {"canonical_name": "chicken breast", "ancestors": ["chicken"], "attributes": {}, "hardAttributeKeys": []}
+(Fresh/raw is the default — no state attribute. A recipe saying "chicken breast" implies fresh chicken breast.)
+Frozen Chicken Breast → {"canonical_name": "chicken breast", "ancestors": ["chicken"], "attributes": {"state": "frozen"}, "hardAttributeKeys": []}
+(Frozen is NOT the default, so include it. But SOFT — can be thawed.)
 
 Red Bell Pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {"color": "red"}, "hardAttributeKeys": []}
 Bell Pepper → {"canonical_name": "bell pepper", "ancestors": [], "attributes": {}, "hardAttributeKeys": []}
@@ -255,12 +299,14 @@ Before responding, silently verify:
 1. Same meaning → same concept.
 2. Ancestors are cooking-interchangeable types, NOT food categories (dairy, produce, meat are NOT ancestors).
 3. Items like wraps, tortillas, pitas do NOT have "bread" as an ancestor (not interchangeable in cooking).
-4. Meaningful flavor/texture distinctions are preserved as HARD attributes.
-5. Minor variations (diet, brand, fat content, spray form) are SOFT attributes.
-6. Unspecified properties remain unspecified.
-7. Singular, lowercase, stable terminology is used.
-8. hardAttributeKeys only contains keys that exist in attributes.
-9. When unsure if HARD or SOFT, lean SOFT (lenient matching).`;
+4. "Given" attributes (fresh, raw, whole, liquid) are NOT included — they're defaults.
+5. "Changeable" attributes (diced, chopped, sliced, minced, grated, crushed, peeled) are SOFT.
+6. Only truly HARD attributes that can't be changed at home are marked HARD (powder, paste, dry herbs, color for onions, source for oils).
+7. Minor variations (diet, brand, fat content, spray form, packaging) are SOFT.
+8. Unspecified properties remain unspecified.
+9. Singular, lowercase, stable terminology is used.
+10. hardAttributeKeys only contains keys that exist in attributes.
+11. When unsure if HARD or SOFT, lean SOFT (lenient matching).`;
 
 /**
  * Canonicalize a list of ingredient names using Gemini.
@@ -421,16 +467,26 @@ export interface MatchResult {
  *   1. Concept match: recipe's canonical_name must be in pantry's concept path
  *      (pantry's canonical_name + ancestors). Directional: specific satisfies general.
  *
- *   2. Hard attributes (from EITHER side's hardAttributeKeys):
- *      Must match exactly. If either side marks an attribute as hard, it's blocking.
- *      e.g. recipe "red onion" (color:red, HARD), pantry "yellow onion" (color:yellow, HARD) → NO MATCH
- *      e.g. recipe "red onion" (color:red, HARD), pantry "onion" (no color) → NO MATCH
+ *   2. Attribute matching (ASYMMETRIC):
+ *      The recipe is the REQUIREMENT, the pantry is what you HAVE.
  *
- *   3. Soft attributes (NOT in hardAttributeKeys):
- *      - If BOTH sides have the attribute AND values differ → match, but add a warning.
- *      - If only one side has the attribute → ignore (not enough info).
- *      e.g. recipe "light butter" (fat:light, SOFT), pantry "butter" (no fat) → MATCH, no warning
- *      e.g. recipe "light butter" (fat:light, SOFT), pantry "butter" (fat:full, SOFT) → MATCH + warning
+ *      a) Both sides have the attribute:
+ *         - Values agree → match.
+ *         - Values disagree + either side marks it HARD → NO MATCH.
+ *         - Values disagree + both SOFT → match + warning.
+ *
+ *      b) Only RECIPE has the attribute (pantry doesn't):
+ *         - HARD on recipe → NO MATCH (pantry is too generic).
+ *           e.g. recipe "red onion" (color:red, HARD), pantry "onion" → NO MATCH.
+ *         - SOFT on recipe → ignore (not enough info to dispute).
+ *
+ *      c) Only PANTRY has the attribute (recipe doesn't):
+ *         - MATCH regardless of hard/soft. The pantry is MORE SPECIFIC than
+ *           the recipe needs, which is fine.
+ *           e.g. recipe "onion", pantry "red onion" (color:red, HARD) → MATCH.
+ *           e.g. recipe "chicken breast", pantry "chicken breast" (state:fresh, HARD) → MATCH.
+ *           e.g. recipe "garlic", pantry "garlic powder" (state:dry, HARD) → MATCH.
+ *                (The recipe didn't specify fresh or dry, so dry garlic satisfies.)
  */
 export function matchIngredient(
   recipe: CanonicalIngredient,
@@ -452,43 +508,44 @@ export function matchIngredient(
     ...Object.keys(pantry.attributes),
   ]);
 
-  // 3. Determine which keys are hard (from either side).
   const recipeHard = new Set(recipe.hardAttributeKeys);
   const pantryHard = new Set(pantry.hardAttributeKeys);
 
   const warnings: string[] = [];
 
   for (const key of allKeys) {
-    const isHard = recipeHard.has(key) || pantryHard.has(key);
     const recipeValue = recipe.attributes[key];
     const pantryValue = pantry.attributes[key];
+    const recipeHasIt = recipeValue !== undefined;
+    const pantryHasIt = pantryValue !== undefined;
 
-    if (recipeValue === undefined || pantryValue === undefined) {
-      // Only one side has this attribute.
+    if (recipeHasIt && pantryHasIt) {
+      // Both sides have the attribute.
+      if (recipeValue === pantryValue) continue; // Agree.
+
+      const isHard = recipeHard.has(key) || pantryHard.has(key);
       if (isHard) {
-        // Hard attribute missing on one side → no match (too generic).
+        // Hard disagreement → no match.
         return { matched: false, warnings: [] };
       }
-      // Soft attribute missing on one side → ignore (not enough info).
+
+      // Soft disagreement → match but warn.
+      warnings.push(
+        `${key}: recipe needs "${recipeValue}", pantry has "${pantryValue}"`,
+      );
+    } else if (recipeHasIt && !pantryHasIt) {
+      // Only recipe has it — pantry is too generic.
+      if (recipeHard.has(key)) {
+        // Recipe needs something specific, pantry doesn't have it → no match.
+        return { matched: false, warnings: [] };
+      }
+      // Soft attribute on recipe, missing on pantry → ignore.
+    } else if (!recipeHasIt && pantryHasIt) {
+      // Only pantry has it — pantry is more specific than the recipe needs.
+      // This is always fine: the pantry item satisfies the generic recipe need.
+      // (No warning needed — the recipe didn't ask for this attribute.)
       continue;
     }
-
-    // Both sides have the attribute.
-    if (recipeValue === pantryValue) {
-      // Values agree → all good.
-      continue;
-    }
-
-    // Values disagree.
-    if (isHard) {
-      // Hard attribute disagrees → no match.
-      return { matched: false, warnings: [] };
-    }
-
-    // Soft attribute disagrees → match but warn.
-    warnings.push(
-      `${key}: recipe needs "${recipeValue}", pantry has "${pantryValue}"`,
-    );
   }
 
   return { matched: true, warnings };

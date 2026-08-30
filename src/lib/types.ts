@@ -4,6 +4,7 @@
 
 export interface InstagramPost {
   videoUrl: string | null;
+  videoUrls?: string[]; // All video URLs from the scraper (for fallback if first has no audio)
   caption: string | null;
   comments: InstagramComment[];
   thumbnailUrl: string | null;
