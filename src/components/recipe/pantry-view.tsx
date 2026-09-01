@@ -1,12 +1,17 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Search, Clock, AlertTriangle, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   Sheet,
   SheetContent,
@@ -83,6 +88,9 @@ export function PantryView() {
   const { authToken, pantryItems, fetchPantry, addPantryItem, updatePantryItem, removePantryItem } = useStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expiryFilter, setExpiryFilter] = useState<'all' | 'expiring' | 'expired' | 'noexpiry'>('all');
+  const [showLowOnly, setShowLowOnly] = useState(false);
   const [newName, setNewName] = useState('');
   const [newQuantity, setNewQuantity] = useState('');
   const [newExpiry, setNewExpiry] = useState('');
@@ -297,8 +305,59 @@ export function PantryView() {
   }
 
   const categories = Array.from(new Set(items.map((i) => i.category || 'Other'))).sort();
-  const filtered = filter === 'all' ? items : items.filter((i) => (i.category || 'Other') === filter);
   const now = new Date();
+  const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+  // Apply all filters: category + search + expiry + running low.
+  const filtered = items.filter((item) => {
+    // Category filter.
+    if (filter !== 'all' && (item.category || 'Other') !== filter) return false;
+
+    // Search filter — match on name AND genericName.
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const nameMatch = item.name.toLowerCase().includes(q);
+      const genericMatch = item.genericName?.toLowerCase().includes(q);
+      if (!nameMatch && !genericMatch) return false;
+    }
+
+    // Expiry filter.
+    if (expiryFilter === 'expiring') {
+      if (!item.expiryDate) return false;
+      const expiry = new Date(item.expiryDate);
+      if (expiry > threeDaysFromNow) return false;
+    } else if (expiryFilter === 'expired') {
+      if (!item.expiryDate) return false;
+      const expiry = new Date(item.expiryDate);
+      if (expiry > now) return false;
+    } else if (expiryFilter === 'noexpiry') {
+      if (item.expiryDate) return false;
+    }
+
+    // Running low filter.
+    if (showLowOnly && !item.isRunningLow) return false;
+
+    return true;
+  });
+
+  // Count items for each expiry filter.
+  const expiringCount = items.filter((i) => {
+    if (!i.expiryDate) return false;
+    const expiry = new Date(i.expiryDate);
+    return expiry <= threeDaysFromNow && expiry > now;
+  }).length;
+  const expiredCount = items.filter((i) => {
+    if (!i.expiryDate) return false;
+    return new Date(i.expiryDate) <= now;
+  }).length;
+  const noExpiryCount = items.filter((i) => !i.expiryDate).length;
+  const lowCount = items.filter((i) => i.isRunningLow).length;
+
+  // Active filter count for badge.
+  const activeFilterCount =
+    (searchQuery ? 1 : 0) +
+    (expiryFilter !== 'all' ? 1 : 0) +
+    (showLowOnly ? 1 : 0);
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
@@ -313,7 +372,10 @@ export function PantryView() {
             <Package className="h-6 w-6 sm:h-7 sm:w-7 text-primary" />
             Pantry
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">{items.length} items tracked</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {items.length} item{items.length === 1 ? '' : 's'} tracked
+            {activeFilterCount > 0 && ` · ${filtered.length} shown`}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
@@ -394,10 +456,8 @@ export function PantryView() {
                   ))}
                 </div>
               )}
-              <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
-                <option value="">Auto-categorize</option>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              {/* Category selector — searchable dropdown */}
+              <CategorySelector value={newCategory} onChange={setNewCategory} />
               {barcodeValue && (
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">Barcode: {barcodeValue}</Badge>
@@ -418,20 +478,115 @@ export function PantryView() {
         </Card>
       )}
 
-      {/* Filter tabs */}
-      {categories.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1">
-          <button onClick={() => setFilter('all')} className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${filter === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-            All ({items.length})
-          </button>
-          {categories.map((cat) => {
-            const count = items.filter((i) => (i.category || 'Other') === cat).length;
-            return (
-              <button key={cat} onClick={() => setFilter(cat)} className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${filter === cat ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-                {cat} ({count})
+      {/* Search and filters */}
+      {items.length > 0 && (
+        <div className="space-y-3">
+          {/* Search bar */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by name or generic name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-10"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
               </button>
-            );
-          })}
+            )}
+          </div>
+
+          {/* Quick filter pills: expiry + running low */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Running low toggle */}
+            {lowCount > 0 && (
+              <button
+                onClick={() => setShowLowOnly(!showLowOnly)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  showLowOnly
+                    ? 'bg-amber-500 text-white border-amber-500'
+                    : 'bg-background text-amber-600 border-amber-300 hover:bg-amber-50'
+                }`}
+              >
+                <AlertTriangle className="h-3 w-3" />
+                Running Low ({lowCount})
+              </button>
+            )}
+
+            {/* Expiry filters */}
+            {expiringCount > 0 && (
+              <button
+                onClick={() => setExpiryFilter(expiryFilter === 'expiring' ? 'all' : 'expiring')}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  expiryFilter === 'expiring'
+                    ? 'bg-orange-500 text-white border-orange-500'
+                    : 'bg-background text-orange-600 border-orange-300 hover:bg-orange-50'
+                }`}
+              >
+                <Clock className="h-3 w-3" />
+                Expiring Soon ({expiringCount})
+              </button>
+            )}
+            {expiredCount > 0 && (
+              <button
+                onClick={() => setExpiryFilter(expiryFilter === 'expired' ? 'all' : 'expired')}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  expiryFilter === 'expired'
+                    ? 'bg-red-500 text-white border-red-500'
+                    : 'bg-background text-red-600 border-red-300 hover:bg-red-50'
+                }`}
+              >
+                <AlertTriangle className="h-3 w-3" />
+                Expired ({expiredCount})
+              </button>
+            )}
+            {noExpiryCount > 0 && (
+              <button
+                onClick={() => setExpiryFilter(expiryFilter === 'noexpiry' ? 'all' : 'noexpiry')}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all border ${
+                  expiryFilter === 'noexpiry'
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background text-muted-foreground border-border hover:bg-muted'
+                }`}
+              >
+                No Expiry ({noExpiryCount})
+              </button>
+            )}
+
+            {/* Clear all */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setExpiryFilter('all');
+                  setShowLowOnly(false);
+                }}
+                className="shrink-0 px-3 py-1.5 rounded-full text-xs font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+              >
+                <X className="h-3 w-3" />
+                Clear
+              </button>
+            )}
+          </div>
+
+          {/* Category filter tabs */}
+          <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1">
+            <button onClick={() => setFilter('all')} className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${filter === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
+              All ({items.length})
+            </button>
+            {categories.map((cat) => {
+              const count = items.filter((i) => (i.category || 'Other') === cat).length;
+              return (
+                <button key={cat} onClick={() => setFilter(cat)} className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${filter === cat ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
+                  {cat} ({count})
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -598,16 +753,10 @@ export function PantryView() {
                   <p className="text-xs text-muted-foreground mb-1">Category</p>
                   {editingField === 'category' ? (
                     <div className="flex gap-2">
-                      <select
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        className="flex-1 h-8 rounded-md border border-input bg-background px-2 text-sm"
-                        autoFocus
-                      >
-                        <option value="">Select...</option>
-                        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                      <Button size="icon" className="h-8 w-8" onClick={() => saveEdit('category')}>
+                      <div className="flex-1">
+                        <CategorySelector value={editValue} onChange={setEditValue} />
+                      </div>
+                      <Button size="icon" className="h-10 w-10 shrink-0" onClick={() => saveEdit('category')}>
                         <Check className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -759,5 +908,87 @@ function CommonItemsDropdown({ query, pantryItems, onSelect }: CommonItemsDropdo
         );
       })}
     </div>
+  );
+}
+
+// =============================================================================
+// CategorySelector — searchable dropdown for food categories
+// =============================================================================
+
+interface CategorySelectorProps {
+  value: string;
+  onChange: (value: string) => void;
+}
+
+function CategorySelector({ value, onChange }: CategorySelectorProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const filtered = CATEGORIES.filter((c) =>
+    c.toLowerCase().includes(search.toLowerCase().trim()),
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className="w-full h-10 justify-between text-sm font-normal"
+        >
+          <span className={value ? '' : 'text-muted-foreground'}>
+            {value || 'Auto-categorize'}
+          </span>
+          <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <div className="p-2 border-b">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search categories..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-8 pl-7 text-sm"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="max-h-48 overflow-y-auto custom-scrollbar p-1">
+          <button
+            onClick={() => {
+              onChange('');
+              setOpen(false);
+              setSearch('');
+            }}
+            className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm hover:bg-muted transition-colors ${
+              value === '' ? 'bg-primary/10 text-primary font-medium' : ''
+            }`}
+          >
+            Auto-categorize
+          </button>
+          {filtered.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => {
+                onChange(cat);
+                setOpen(false);
+                setSearch('');
+              }}
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm hover:bg-muted transition-colors ${
+                value === cat ? 'bg-primary/10 text-primary font-medium' : ''
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <p className="text-xs text-muted-foreground text-center py-2">
+              No categories match &ldquo;{search}&rdquo;
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
