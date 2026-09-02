@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
     keys: { p256dh: string; auth: string };
     expirationTime?: number | null;
     notificationHour?: number;
+    timezone?: string;
   };
 
   try {
@@ -51,6 +52,7 @@ export async function POST(request: NextRequest) {
         auth: body.keys.auth,
         expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
         notificationHour: body.notificationHour ?? 9,
+        timezone: body.timezone || 'UTC',
       },
       update: {
         userId: user.id,
@@ -58,6 +60,7 @@ export async function POST(request: NextRequest) {
         auth: body.keys.auth,
         expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
         notificationHour: body.notificationHour ?? 9,
+        timezone: body.timezone || 'UTC',
       },
     });
 

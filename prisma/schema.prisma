@@ -189,6 +189,7 @@ model PushSubscription {
   createdAt       DateTime @default(now())
   lastNotifiedAt  DateTime? // Last time we sent a notification to this subscription (per-item tracking is in NotifiedItem)
   notificationHour Int    @default(9) // Hour of day to send notifications (0-23, user's timezone)
+  timezone        String   @default("UTC") // IANA timezone (e.g. "Europe/London")
 
   @@index([userId])
 }

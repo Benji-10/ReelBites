@@ -1,16 +1,17 @@
 /**
  * Netlify Scheduled Function: Expiry Check
  *
- * Runs daily at 9:00 AM UTC (adjust as needed) to check all pantry items
- * for upcoming expiries and send push notifications.
+ * Runs EVERY HOUR to check if it's notification time (9am) in each user's
+ * local timezone. When it is, checks all their pantry items for upcoming
+ * expiries and sends push notifications.
  *
  * Alerts are sent at: 7 days, 3 days, 1 day, and day-of expiry.
  * The NotifiedItem table prevents duplicate notifications.
  *
- * Setup:
- *   - This function is automatically scheduled via netlify.toml
- *   - Requires VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY env vars
- *   - Requires DATABASE_URL env var
+ * The function is scheduled hourly with schedule('0 * * * *').
+ * For each subscription, it checks: is the current hour (in the user's
+ * timezone) equal to their notificationHour? If yes, send alerts.
+ * This ensures each user gets alerts at 9am THEIR local time.
  *
  * You can also trigger it manually:
  *   curl -X POST https://your-site.netlify.app/.netlify/functions/expiry-check
@@ -29,6 +30,25 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     process.env.VAPID_PUBLIC_KEY,
     process.env.VAPID_PRIVATE_KEY,
   );
+}
+
+/**
+ * Get the current hour in a given IANA timezone.
+ * Returns -1 if the timezone is invalid.
+ */
+function getCurrentHourInTimezone(timezone: string): number {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(new Date());
+    const hourPart = parts.find((p) => p.type === 'hour');
+    return hourPart ? parseInt(hourPart.value, 10) : -1;
+  } catch {
+    return -1;
+  }
 }
 
 function daysUntil(expiryDate: Date): number {
@@ -103,42 +123,66 @@ async function sendPushNotification(
 
 async function runExpiryCheck() {
   const startTime = Date.now();
-  console.log('[expiry-check] Starting scheduled expiry check...');
+  const utcHour = new Date().getUTCHours();
+  console.log(`[expiry-check] Running hourly check (UTC hour: ${utcHour})...`);
 
   const stats = {
     itemsChecked: 0,
     notificationsSent: 0,
     notificationsSkipped: 0,
+    usersChecked: 0,
+    usersSkipped: 0,
     errors: 0,
   };
 
   try {
-    // Fetch all pantry items with expiry dates.
-    const items = await prisma.pantryItem.findMany({
-      where: { expiryDate: { not: null } },
-      select: { id: true, userId: true, name: true, expiryDate: true, quantity: true },
+    // Get ALL push subscriptions.
+    const allSubscriptions = await prisma.pushSubscription.findMany({
+      select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true, notificationHour: true, timezone: true },
     });
-    stats.itemsChecked = items.length;
-    console.log(`[expiry-check] Found ${items.length} items with expiry dates.`);
 
-    // Group by user.
-    const itemsByUser = new Map<string, typeof items>();
-    for (const item of items) {
-      const arr = itemsByUser.get(item.userId) || [];
-      arr.push(item);
-      itemsByUser.set(item.userId, arr);
+    console.log(`[expiry-check] Found ${allSubscriptions.length} total subscriptions.`);
+
+    // Group subscriptions by user.
+    const subsByUser = new Map<string, typeof allSubscriptions>();
+    for (const sub of allSubscriptions) {
+      const arr = subsByUser.get(sub.userId) || [];
+      arr.push(sub);
+      subsByUser.set(sub.userId, arr);
     }
 
-    for (const [userId, userItems] of itemsByUser) {
-      // Get this user's push subscriptions.
-      const subscriptions = await prisma.pushSubscription.findMany({
-        where: { userId },
-        select: { endpoint: true, p256dh: true, auth: true },
+    // For each user, check if it's their notification hour.
+    for (const [userId, subs] of subsByUser) {
+      // Use the first subscription's timezone (all subscriptions for a user should have the same timezone).
+      const timezone = subs[0].timezone || 'UTC';
+      const notificationHour = subs[0].notificationHour ?? 9;
+
+      const currentLocalHour = getCurrentHourInTimezone(timezone);
+      if (currentLocalHour === -1) {
+        console.warn(`[expiry-check] Invalid timezone "${timezone}" for user ${userId.slice(-8)}`);
+        stats.errors++;
+        continue;
+      }
+
+      // Only proceed if it's the user's notification hour.
+      if (currentLocalHour !== notificationHour) {
+        stats.usersSkipped++;
+        continue;
+      }
+
+      stats.usersChecked++;
+      console.log(`[expiry-check] User ${userId.slice(-8)} — local hour ${currentLocalHour} matches notification hour ${notificationHour} (${timezone})`);
+
+      // Get this user's pantry items with expiry dates.
+      const items = await prisma.pantryItem.findMany({
+        where: { userId, expiryDate: { not: null } },
+        select: { id: true, userId: true, name: true, expiryDate: true, quantity: true },
       });
+      stats.itemsChecked += items.length;
 
-      if (subscriptions.length === 0) continue;
+      if (items.length === 0) continue;
 
-      for (const item of userItems) {
+      for (const item of items) {
         if (!item.expiryDate) continue;
 
         const daysLeft = daysUntil(item.expiryDate);
@@ -173,8 +217,11 @@ async function runExpiryCheck() {
         console.log(`[expiry-check] Sending "${alertType}" for "${item.name}" (days left: ${daysLeft})`);
 
         let sent = false;
-        for (const sub of subscriptions) {
-          const success = await sendPushNotification(sub, payload);
+        for (const sub of subs) {
+          const success = await sendPushNotification(
+            { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
+            payload,
+          );
           if (success) sent = true;
         }
 
@@ -211,11 +258,10 @@ async function runExpiryCheck() {
   return { duration: `${duration}s`, stats };
 }
 
-// Schedule: runs daily at 9:00 AM UTC.
-// Cron expression: "0 9 * * *"
-// To change the time, update the cron expression below.
-// Note: times are in UTC. 9:00 UTC = 10:00 BST (summer) / 9:00 GMT (winter).
-const handler = schedule('0 9 * * *', async () => {
+// Schedule: runs EVERY HOUR.
+// For each user, it checks if the current hour in their timezone matches
+// their notificationHour (default 9). This ensures alerts come at 9am local time.
+const handler = schedule('0 * * * *', async () => {
   const result = await runExpiryCheck();
 
   return {

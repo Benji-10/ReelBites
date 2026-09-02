@@ -94,6 +94,8 @@ export function usePushNotifications(authToken: string | null) {
           endpoint: subscription.endpoint,
           keys: subscription.toJSON().keys,
           expirationTime: subscription.expirationTime,
+          // Capture the user's timezone so alerts come at 9am local time.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         }),
       });
 

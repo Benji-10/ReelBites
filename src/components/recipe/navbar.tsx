@@ -1,6 +1,6 @@
 'use client';
 
-import { ChefHat, Sparkles, BookOpen, Sun, Moon, Palette, LogOut, Settings, Package, ShoppingCart } from 'lucide-react';
+import { ChefHat, Sparkles, BookOpen, Sun, Moon, Palette, LogOut, Settings, Package, ShoppingCart, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -40,12 +40,11 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
     { key: 'berry', label: 'Berry', color: 'bg-pink-500' },
   ] as const;
 
-  const showExtraControls = isReady && !!user;
-
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-md">
       <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between gap-2">
+          {/* Logo */}
           <button
             onClick={() => onNavigate('extract')}
             className="flex items-center gap-2 font-bold text-lg shrink-0 hover:opacity-80 transition-opacity"
@@ -56,6 +55,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             <span className="hidden sm:inline">RealBites</span>
           </button>
 
+          {/* Main nav */}
           <nav className="flex items-center gap-1 shrink-0">
             <Button
               variant={currentView === 'extract' ? 'default' : 'ghost'}
@@ -104,44 +104,62 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
             </Button>
           </nav>
 
+          {/* Right side controls */}
           <div className="flex items-center gap-1 shrink-0">
+            {/* Theme toggle — always visible */}
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-9 w-9">
               {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
 
-            {showExtraControls && (
-              <>
-                <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9 hidden sm:flex">
-                  <Settings className="h-4 w-4" />
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-9 w-9 hidden sm:flex">
-                      <Palette className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuLabel>Color Theme</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {colorThemes.map((t) => (
-                      <DropdownMenuItem key={t.key} onClick={() => setColorTheme(t.key)} className="gap-2 cursor-pointer">
-                        <div className={`h-4 w-4 rounded-full ${t.color}`} />
-                        {t.label}
-                        {colorTheme === t.key && <span className="ml-auto text-xs">✓</span>}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
+            {/* Settings button — always visible */}
+            {isReady && (
+              <Button variant="ghost" size="icon" onClick={onOpenSettings} className="h-9 w-9">
+                <Settings className="h-4 w-4" />
+              </Button>
             )}
 
-            {isReady && user ? (
-              <Button variant="ghost" size="icon" onClick={onLogout} className="h-9 w-9">
-                <LogOut className="h-4 w-4" />
-              </Button>
-            ) : isReady && !user ? (
+            {/* Menu dropdown — color theme + logout (saves space on mobile) */}
+            {isReady && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9">
+                    <Menu className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {user && (
+                    <>
+                      <DropdownMenuLabel className="text-xs text-muted-foreground truncate">
+                        {user.email}
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuLabel>Color Theme</DropdownMenuLabel>
+                  {colorThemes.map((t) => (
+                    <DropdownMenuItem key={t.key} onClick={() => setColorTheme(t.key)} className="gap-2 cursor-pointer">
+                      <div className={`h-4 w-4 rounded-full ${t.color}`} />
+                      {t.label}
+                      {colorTheme === t.key && <span className="ml-auto text-xs">✓</span>}
+                    </DropdownMenuItem>
+                  ))}
+                  {user && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={onLogout} className="gap-2 cursor-pointer text-destructive">
+                        <LogOut className="h-4 w-4" />
+                        Log out
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            {/* Sign up button for non-logged-in users */}
+            {isReady && !user && (
               <Button size="sm" onClick={onSignup} className="text-xs px-3">Sign up</Button>
-            ) : null}
+            )}
           </div>
         </div>
       </div>
