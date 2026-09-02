@@ -16,6 +16,7 @@ import {
 import { useStore } from '@/lib/store';
 import { RecipeCard } from './recipe-card';
 import { PantryRecipeGenerator } from './pantry-recipe-generator';
+import { SearchableMultiSelect } from './searchable-multi-select';
 
 type FilterType = 'all' | 'favorites' | 'generated' | string;
 
@@ -110,9 +111,8 @@ export function RecipeBox() {
   const filteredRecipes = useMemo(() => {
     let result = recipes;
 
-    // Collection/favorites/generated filter.
+    // Collection/favorites filter.
     if (filter === 'favorites') result = result.filter((r) => r.isFavorite);
-    else if (filter === 'generated') result = result.filter((r) => r.id.startsWith('temp-pantry-'));
     else if (filter !== 'all') result = result.filter((r) => r.collection === filter);
 
     // Search query — match on title and description.
@@ -163,25 +163,6 @@ export function RecipeBox() {
   }, [recipes, filter, searchQuery, selectedTags, selectedIngredients, timeFilter]);
 
   const favoritesCount = recipes.filter((r) => r.isFavorite).length;
-  const generatedCount = recipes.filter((r) => r.id.startsWith('temp-pantry-')).length;
-
-  function toggleTag(tag: string) {
-    setSelectedTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-  }
-
-  function toggleIngredient(ing: string) {
-    setSelectedIngredients((prev) => {
-      const next = new Set(prev);
-      if (next.has(ing)) next.delete(ing);
-      else next.add(ing);
-      return next;
-    });
-  }
 
   function clearAllFilters() {
     setSearchQuery('');
@@ -192,8 +173,8 @@ export function RecipeBox() {
 
   const timeFilters: { value: TimeFilter; label: string; icon: string; color: string }[] = [
     { value: 'quick', label: 'Quick', icon: '⚡', color: 'text-green-600 border-green-300 bg-green-50' },
-    { value: 'medium', label: 'Medium', icon: '中火', color: 'text-amber-600 border-amber-300 bg-amber-50' },
-    { value: 'long', label: 'Long', icon: '慢炖', color: 'text-red-600 border-red-300 bg-red-50' },
+    { value: 'medium', label: 'Medium', icon: '⏱', color: 'text-amber-600 border-amber-300 bg-amber-50' },
+    { value: 'long', label: 'Long', icon: '🔥', color: 'text-red-600 border-red-300 bg-red-50' },
   ];
 
   return (
@@ -305,104 +286,30 @@ export function RecipeBox() {
                 </div>
               </div>
 
-              {/* Tag multi-select */}
+              {/* Tag multi-select (searchable) */}
               {allTags.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">Tags</span>
-                    {selectedTags.size > 0 && (
-                      <Badge variant="secondary" className="text-xs">{selectedTags.size} selected</Badge>
-                    )}
-                  </div>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" className="w-full justify-between h-9">
-                        <span className="text-muted-foreground">
-                          {selectedTags.size === 0 ? 'Filter by tags...' : `${selectedTags.size} tag${selectedTags.size > 1 ? 's' : ''} selected`}
-                        </span>
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 max-h-60 overflow-y-auto custom-scrollbar" align="start">
-                      <div className="space-y-1">
-                        {allTags.map((tag) => (
-                          <label key={tag} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted cursor-pointer">
-                            <Checkbox
-                              checked={selectedTags.has(tag)}
-                              onCheckedChange={() => toggleTag(tag)}
-                            />
-                            <span className="text-sm">{tag}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                  {selectedTags.size > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {Array.from(selectedTags).map((tag) => (
-                        <Badge key={tag} variant="secondary" className="text-xs gap-1">
-                          {tag}
-                          <button onClick={() => toggleTag(tag)} className="hover:text-destructive">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <SearchableMultiSelect
+                  options={allTags}
+                  selected={selectedTags}
+                  onChange={setSelectedTags}
+                  placeholder="Filter by tags..."
+                  searchPlaceholder="Search tags..."
+                  label="Tags"
+                />
               )}
 
-              {/* Ingredient multi-select */}
+              {/* Ingredient multi-select (searchable) */}
               {allIngredients.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <ChefHat className="h-4 w-4 text-primary" />
-                    <span className="text-sm font-medium">Ingredients</span>
-                    {selectedIngredients.size > 0 && (
-                      <Badge variant="secondary" className="text-xs">{selectedIngredients.size} selected</Badge>
-                    )}
-                  </div>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" className="w-full justify-between h-9">
-                        <span className="text-muted-foreground">
-                          {selectedIngredients.size === 0 ? 'Filter by ingredients...' : `${selectedIngredients.size} ingredient${selectedIngredients.size > 1 ? 's' : ''} selected`}
-                        </span>
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 max-h-60 overflow-y-auto custom-scrollbar" align="start">
-                      <div className="space-y-1">
-                        {allIngredients.slice(0, 100).map((ing) => (
-                          <label key={ing} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted cursor-pointer">
-                            <Checkbox
-                              checked={selectedIngredients.has(ing)}
-                              onCheckedChange={() => toggleIngredient(ing)}
-                            />
-                            <span className="text-sm capitalize">{ing}</span>
-                          </label>
-                        ))}
-                        {allIngredients.length > 100 && (
-                          <p className="text-xs text-muted-foreground text-center py-2">
-                            +{allIngredients.length - 100} more...
-                          </p>
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                  {selectedIngredients.size > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {Array.from(selectedIngredients).map((ing) => (
-                        <Badge key={ing} variant="secondary" className="text-xs gap-1 capitalize">
-                          {ing}
-                          <button onClick={() => toggleIngredient(ing)} className="hover:text-destructive">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <SearchableMultiSelect
+                  options={allIngredients}
+                  selected={selectedIngredients}
+                  onChange={setSelectedIngredients}
+                  placeholder="Filter by ingredients..."
+                  searchPlaceholder="Search ingredients..."
+                  label="Ingredients"
+                  icon={<ChefHat className="h-4 w-4 text-primary" />}
+                  capitalize
+                />
               )}
 
               {/* Clear all */}
@@ -434,17 +341,6 @@ export function RecipeBox() {
               >
                 <Star className="h-3.5 w-3.5" />
                 Favorites ({favoritesCount})
-              </button>
-            )}
-            {generatedCount > 0 && (
-              <button
-                onClick={() => setFilter('generated')}
-                className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  filter === 'generated' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                }`}
-              >
-                <Wand2 className="h-3.5 w-3.5" />
-                AI Generated ({generatedCount})
               </button>
             )}
             {collections.map((col) => {

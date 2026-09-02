@@ -1,10 +1,13 @@
 'use client';
 
-import { useEffect } from 'react';
-import { Settings, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Settings, X, Bell, BellOff, Loader2, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useSettings } from '@/lib/settings';
+import { useStore } from '@/lib/store';
+import { usePushNotifications } from '@/hooks/use-push-notifications';
+import { toast } from 'sonner';
 
 interface SettingsModalProps {
   open: boolean;
@@ -16,6 +19,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     smallLiquid, largeLiquid, weight, dry, temperature,
     defaultServings, inventoryDeduction, setSetting, setAllMetric, setAllImperial, loadFromStorage,
   } = useSettings();
+  const { authToken } = useStore();
+  const push = usePushNotifications(authToken);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     loadFromStorage();
@@ -134,6 +140,80 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               {inventoryDeduction === 'confirm' && 'Shows a review screen before deducting. You can edit amounts (e.g. if you used more or finished an item).'}
               {inventoryDeduction === 'none' && 'No deduction prompts. For users who don\'t track pantry quantities.'}
             </p>
+          </div>
+
+          {/* Push Notifications */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Expiry Alerts</label>
+            <p className="text-xs text-muted-foreground">
+              Get push notifications when pantry items are about to expire (7 days, 3 days, 1 day, and day of).
+            </p>
+            {!push.isSupported ? (
+              <p className="text-xs text-muted-foreground py-2">
+                Push notifications are not supported in this browser.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {push.isSubscribed ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={push.unsubscribe}
+                      disabled={push.loading}
+                      className="gap-1.5 flex-1"
+                    >
+                      {push.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BellOff className="h-3.5 w-3.5" />}
+                      Disable Alerts
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        setTesting(true);
+                        const result = await push.sendTest();
+                        setTesting(false);
+                        if (result.error) {
+                          toast.error(result.error);
+                        } else {
+                          toast.success(`Test sent! Check your notifications. (${result.sent} sent, ${result.failed} failed)`);
+                        }
+                      }}
+                      disabled={testing}
+                      className="gap-1.5"
+                    >
+                      {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Test
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      const success = await push.subscribe();
+                      if (success) {
+                        toast.success('Push notifications enabled!');
+                      } else if (push.permission === 'denied') {
+                        toast.error('Notification permission was denied. Please enable it in your browser settings.');
+                      } else {
+                        toast.error('Could not enable push notifications.');
+                      }
+                    }}
+                    disabled={push.loading}
+                    className="gap-1.5 w-full"
+                  >
+                    {push.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                    Enable Expiry Alerts
+                  </Button>
+                )}
+                {push.permission === 'denied' && (
+                  <p className="text-xs text-amber-600">
+                    Notification permission is blocked. Please enable it in your browser settings to receive alerts.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <Button onClick={onClose} className="w-full">Done</Button>

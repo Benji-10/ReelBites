@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useStore } from '@/lib/store';
+import { matchIngredient, type CanonicalIngredient } from '@/lib/canonicalize';
 import type { SavedRecipe, RecipeIngredient } from '@/lib/types';
 
 interface InventoryDeductionModalProps {
@@ -55,21 +56,23 @@ export function InventoryDeductionModal({
       const recipeAmount = parseFloat(ing.amount || '0') * scaleFactor;
       const recipeUnit = ing.unit || '';
 
-      // Try to find a matching pantry item.
-      // Simple match: check if any pantry item's genericName or name matches.
-      const ingNameLower = ing.name.toLowerCase().trim();
-      const ingCanonical = ing.canonicalName?.toLowerCase().trim();
+      // Build the recipe's canonical ingredient structure.
+      const recipeCanonical: CanonicalIngredient = {
+        canonical_name: ing.canonicalName || ing.name.toLowerCase().trim(),
+        ancestors: ing.canonicalAncestors || [],
+        attributes: ing.canonicalAttributes || {},
+        hardAttributeKeys: ing.canonicalHardAttributeKeys || [],
+      };
 
+      // Find matching pantry item using the full matchIngredient logic.
       const match = pantryItems.find((p) => {
-        const pName = p.name.toLowerCase().trim();
-        const pGeneric = p.genericName?.toLowerCase().trim();
-        // Match on canonical name if available.
-        if (ingCanonical && pGeneric && ingCanonical === pGeneric) return true;
-        // Fallback: simple name match.
-        if (ingNameLower === pName || ingNameLower === pGeneric) return true;
-        // Fallback: one contains the other.
-        if (ingNameLower.length > 3 && (pName.includes(ingNameLower) || ingNameLower.includes(pName))) return true;
-        return false;
+        const pantryCanonical: CanonicalIngredient = {
+          canonical_name: p.genericName || p.name.toLowerCase().trim(),
+          ancestors: (p as { canonicalAncestors?: string[] }).canonicalAncestors || [],
+          attributes: (p as { canonicalAttributes?: Record<string, string | string[]> }).canonicalAttributes || {},
+          hardAttributeKeys: (p as { canonicalHardAttributeKeys?: string[] }).canonicalHardAttributeKeys || [],
+        };
+        return matchIngredient(recipeCanonical, pantryCanonical).matched;
       });
 
       return {

@@ -21,10 +21,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  recipes        Recipe[]
-  pantryItems    PantryItem[]
-  shoppingLists  ShoppingList[]
-  recurringItems RecurringItem[]
+  recipes           Recipe[]
+  pantryItems       PantryItem[]
+  shoppingLists     ShoppingList[]
+  recurringItems    RecurringItem[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Recipe {
@@ -173,4 +174,36 @@ model ExtractionJob {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+}
+
+// ---- Push Subscriptions ----
+// Stores Web Push subscription endpoints for sending expiry alerts.
+model PushSubscription {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint        String   @unique // The push service endpoint URL
+  p256dh          String   // Public key for encryption
+  auth            String   // Auth secret
+  expirationTime  DateTime? // When the subscription expires (from the browser)
+  createdAt       DateTime @default(now())
+  lastNotifiedAt  DateTime? // Last time we sent a notification to this subscription (per-item tracking is in NotifiedItem)
+  notificationHour Int    @default(9) // Hour of day to send notifications (0-23, user's timezone)
+
+  @@index([userId])
+}
+
+// ---- Notified Items ----
+// Tracks which pantry items we've already sent notifications for, so we don't
+// spam the user with the same "expiring soon" alert multiple times.
+model NotifiedItem {
+  id            String   @id @default(cuid())
+  userId        String
+  pantryItemId  String
+  alertType     String   // "week_before", "three_days_before", "day_before", "day_of"
+  notifiedAt    DateTime @default(now())
+
+  @@unique([userId, pantryItemId, alertType]) // Prevent duplicate notifications
+  @@index([userId])
+  @@index([pantryItemId])
 }

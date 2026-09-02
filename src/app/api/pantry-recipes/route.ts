@@ -46,8 +46,9 @@ interface GeneratedRecipeRaw {
 function buildPrompt(args: {
   pantryItems: PantryItemInput[];
   mode: 'inspiration' | 'strict';
+  servings: number;
 }): string {
-  const { pantryItems, mode } = args;
+  const { pantryItems, mode, servings } = args;
 
   // Group pantry items by category for the AI.
   const byCategory: Record<string, string[]> = {};
@@ -97,6 +98,18 @@ QUALITY BAR:
 - Specify doneness cues (internal temp, visual cues, texture).
 - Include rest/finish steps where appropriate.
 
+INGREDIENT NAMING:
+- Use natural, descriptive ingredient names as a home cook would say them.
+- Include variety/type information when it matters: "Japanese rice", "short grain rice", "long grain rice" — these are different ingredients with different cooking properties.
+- Keep names clean and natural — no brand names or marketing words.
+- Example: "Pietro Dressing (Wafu)" → "wafu dressing" (use the generic cooking term)
+- Example: "Mushroom Farms Mushrooms" → "mushrooms"
+- But "Japanese short grain rice" is fine — that's useful information for a cook.
+
+SERVINGS:
+- Each recipe should serve ${servings} people.
+- Scale all ingredient amounts to feed ${servings} servings.
+
 For EACH recipe, provide:
 - title: A specific, appetizing name (e.g. "Crispy Skin Chicken Thighs with Roasted Root Veg" not "Chicken and Vegetables")
 - description: 1-2 sentences explaining the dish and why it's good
@@ -109,7 +122,7 @@ For EACH recipe, provide:
   - Include cooking times, temperatures, and visual/texture cues
   - ingredientRefs: array of 0-based indices of ingredients used in that step (empty array if none)
 - metadata: Array of { key, value, evidence: "ai_generated", flag: null }
-  - ALWAYS include: servings, prepTime, cookTime, totalTime, difficulty, cuisine
+  - ALWAYS include: servings (set to ${servings}), prepTime, cookTime, totalTime, difficulty, cuisine
   - Optionally: nutrition (rough estimate), equipment
 - flags: Array of { type, message, field, severity } — only if needed (e.g. "suggested_addition" warnings)
 - tags: Array of 2-5 relevant tags (e.g. "dinner", "high-protein", "30-minute", "one-pan")
@@ -140,7 +153,7 @@ export async function POST(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
 
-  let body: { mode?: 'inspiration' | 'strict' };
+  let body: { mode?: 'inspiration' | 'strict'; servings?: number };
   try {
     body = await request.json();
   } catch {
@@ -148,6 +161,7 @@ export async function POST(request: NextRequest) {
   }
 
   const mode: 'inspiration' | 'strict' = body.mode === 'strict' ? 'strict' : 'inspiration';
+  const servings = body.servings && body.servings > 0 && body.servings <= 20 ? body.servings : 4;
 
   // Fetch the user's pantry items.
   const pantryItemsRaw = await db.pantryItem.findMany({
@@ -184,7 +198,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode });
+    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings });
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
