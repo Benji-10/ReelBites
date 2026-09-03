@@ -72,10 +72,39 @@ function buildPrompt(args: {
 - Do NOT just throw everything in a pan. Each recipe should be a thoughtfully constructed dish.`
       : `INSPIRATION MODE — Use the pantry as inspiration.
 - Identify the key proteins, vegetables, and flavor-makers in the pantry.
-- Create recipes that showcase those ingredients.
+- Create recipes that showcase those ingredients as the stars of the dish.
 - You CAN add common staples (oil, salt, pepper, spices, basic aromatics like onion/garlic if not in pantry) as needed.
 - You can suggest 1-2 additional ingredients per recipe that would elevate the dish (mark them with flag "suggested_addition").
-- But the pantry ingredients should be the STARS of each recipe.`;
+
+RECIPE COMPLEXITY — CRITICAL:
+- These should be REAL, PROPER recipes — the kind you'd find in a cookbook or a restaurant.
+- Do NOT create "assembly" recipes (just combine pre-made things on a plate).
+- Do NOT create random hodgepodge dishes (e.g. "Spicy Gyoza and Egg Breakfast Bowl" is NOT a real dish).
+- Each recipe should have proper cooking TECHNIQUE and multiple preparation stages.
+
+Examples of PROPER recipe complexity:
+- Lasagna (pasta from scratch, béchamel, ragù, layered baking)
+- Slow-cooked beef stew (searing, deglazing, long braise, finishing herbs)
+- Red braised pork belly (blanching, caramelizing sugar, braising in aromatics)
+- Japchae (glass noodles, separately stir-fried vegetables, seasoned and combined)
+- Coq au vin (marinating, browning, braising in wine, finishing with a roux)
+- Chicken biryani (layering, parboiling rice, steaming, garnishing)
+- Risotto (toasting rice, gradual stock additions, constant stirring, finishing with butter)
+- Beef Wellington (searing, mushroom duxelles, wrapping in pastry, baking)
+- Pad thai (preparing sauce, stir-frying in stages, garnishing)
+- Shakshuka (building a complex sauce, poaching eggs, finishing with herbs)
+
+Each of these has:
+- Multiple preparation stages (not just "cook everything together")
+- A specific culinary technique (braising, layering, emulsifying, etc.)
+- A clear, recognized dish name (not a made-up combination)
+- Proper seasoning at each stage of cooking
+
+Do NOT create:
+- "Random thing + random thing bowl" (e.g. "Gyoza and Egg Breakfast Bowl")
+- "Throw everything in a pan" dishes
+- Dishes that are just assembling pre-made components
+- Dishes with made-up names that combine unrelated cuisines`;
 
   return `You are a professional chef and recipe developer creating recipes for a home cook.
 
@@ -85,18 +114,20 @@ AVAILABLE PANTRY ITEMS:
 ${pantryList}
 
 Create 5 DISTINCT, high-quality recipes. Each recipe must be:
-1. A real, cookable dish — not a hodgepodge or "leftover special".
-2. Thoughtfully constructed with proper technique (searing, braising, roasting, etc.).
-3. Flavor-balanced (acid, fat, salt, heat, umami).
-4. Specific — give exact amounts, times, and temperatures.
-5. Diverse — don't make 5 pasta dishes. Vary the cuisine, cooking method, and meal type.
+1. A REAL, recognized dish — not a hodgepodge or invented combination. Think "what would I find in a cookbook?"
+2. Thoughtfully constructed with proper technique (searing, braising, roasting, emulsifying, etc.).
+3. Complex enough to be interesting — multiple preparation stages, not just "assemble and serve".
+4. Flavor-balanced (acid, fat, salt, heat, umami).
+5. Specific — give exact amounts, times, and temperatures.
+6. Diverse — vary the cuisine (Japanese, Italian, Chinese, French, Korean, Mexican, Indian, etc.), cooking method, and meal type.
 
 QUALITY BAR:
-- Each recipe should be something you'd be proud to serve to guests.
+- Each recipe should be something you'd be proud to serve to dinner guests.
 - Include proper seasoning at each stage (not just "add salt" at the end).
-- Include a cooking technique (don't just say "cook until done").
+- Include a specific cooking technique for each major ingredient.
 - Specify doneness cues (internal temp, visual cues, texture).
 - Include rest/finish steps where appropriate.
+- The recipe should feel like a complete dish with a clear identity, not a collection of components on a plate.
 
 INGREDIENT NAMING:
 - Use natural, descriptive ingredient names as a home cook would say them.

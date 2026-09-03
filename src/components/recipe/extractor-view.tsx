@@ -15,7 +15,7 @@ import type { SavedRecipe, GeneratedRecipe } from '@/lib/types';
 
 export function ExtractorView() {
   const router = useRouter();
-  const { extraction, startExtraction, updateExtraction, resetExtraction, addRecipe } = 
+  const { extraction, startExtraction, updateExtraction, resetExtraction, addRecipe, updateRecipe, authToken } =
     useStore();
   const [url, setUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -177,6 +177,27 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe extracted successfully!');
+
+      // Fetch the recipe from the API to get the canonicalized ingredients.
+      // The POST /api/recipes endpoint canonicalizes ingredients, but the
+      // savedRecipe object above uses the original (non-canonicalized) ingredients.
+      // Fetching the recipe ensures the store has the canonical data.
+      try {
+        const fetchRes = await fetch(`/api/recipes/${savedRecipe.id}`, {
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
+        if (fetchRes.ok) {
+          const fetchData = await fetchRes.json();
+          if (fetchData.recipe) {
+            // Update the store with the canonicalized recipe.
+            updateRecipe(fetchData.recipe as SavedRecipe);
+          }
+        }
+      } catch {
+        // If this fails, the lazy canonicalization in recipe-pantry-integration
+        // will handle it when the user views the recipe.
+      }
+
       router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
       setUrl('');
@@ -259,6 +280,20 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe imported successfully!');
+
+      // Fetch the canonicalized recipe from the API.
+      try {
+        const fetchRes = await fetch(`/api/recipes/${savedRecipe.id}`, {
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
+        if (fetchRes.ok) {
+          const fetchData = await fetchRes.json();
+          if (fetchData.recipe) {
+            updateRecipe(fetchData.recipe as SavedRecipe);
+          }
+        }
+      } catch {}
+
       router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
       setUrl('');
@@ -352,6 +387,20 @@ export function ExtractorView() {
 
       addRecipe(savedRecipe);
       toast.success('Recipe imported from photo!');
+
+      // Fetch the canonicalized recipe from the API.
+      try {
+        const fetchRes = await fetch(`/api/recipes/${savedRecipe.id}`, {
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
+        if (fetchRes.ok) {
+          const fetchData = await fetchRes.json();
+          if (fetchData.recipe) {
+            updateRecipe(fetchData.recipe as SavedRecipe);
+          }
+        }
+      } catch {}
+
       router.push(`/recipes/${savedRecipe.id}`);
       resetExtraction();
     } catch (err) {

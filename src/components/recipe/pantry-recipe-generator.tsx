@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useStore } from '@/lib/store';
 import { useSettings } from '@/lib/settings';
 import type { SavedRecipe } from '@/lib/types';
+import { RecipePantryIntegration } from './recipe-pantry-integration';
 
 interface PantryRecipeGeneratorProps {
   open: boolean;
@@ -465,6 +466,9 @@ function RecipeDetailView({ recipe }: { recipe: TempRecipe }) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Pantry integration — shows what you have and what's missing */}
+      <RecipePantryIntegration recipe={recipe as SavedRecipe} />
 
       {/* Instructions */}
       <Card>

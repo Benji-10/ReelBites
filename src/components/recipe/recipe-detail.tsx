@@ -171,6 +171,28 @@ export function RecipeDetail() {
     loadRecipe();
   }, [loadRecipe]);
 
+  // Watch the store for updates to this recipe (e.g. after canonicalization
+  // completes in the extraction flow, the store gets the canonicalized recipe).
+  // When the store version changes, update the local recipe state.
+  const storeRecipe = recipes.find((r) => r.id === recipeId);
+  useEffect(() => {
+    if (storeRecipe && storeRecipe !== recipe) {
+      // Only update if the store version has canonicalized ingredients
+      // (or more data than what we currently have).
+      const storeHasCanonical = storeRecipe.ingredients?.some((i) => i.canonicalName);
+      const currentHasCanonical = recipe?.ingredients?.some((i) => i.canonicalName);
+      if (storeHasCanonical && !currentHasCanonical) {
+        setRecipe(storeRecipe);
+        setEditTitle(storeRecipe.title);
+        setEditDescription(storeRecipe.description || '');
+        setEditIngredients([...(storeRecipe.ingredients || [])]);
+        setEditInstructions([...(storeRecipe.instructions || [])]);
+        setEditMetadata([...(storeRecipe.metadata || [])]);
+        setEditSourceUrl(storeRecipe.sourceUrl || '');
+      }
+    }
+  }, [storeRecipe, recipe]);
+
   // Parse servings from metadata.
   const servingsMeta = recipe?.metadata?.find((m) => m.key.toLowerCase() === 'servings');
   const originalServings = servingsMeta ? parseInt(servingsMeta.value, 10) || 1 : 1;
