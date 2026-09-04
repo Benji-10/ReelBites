@@ -21,6 +21,7 @@ interface ItemBody {
   section?: string;
   sectionOrder?: number;
   recipeId?: string;
+  nonGrocery?: boolean;
 }
 
 // Default supermarket sections and their order.
@@ -114,6 +115,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           section,
           sectionOrder: sectionOrder || 99,
           recipeId: item.recipeId || null,
+          nonGrocery: item.nonGrocery || false,
         },
       });
       created.push(createdItem);

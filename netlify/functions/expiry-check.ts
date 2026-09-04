@@ -51,12 +51,13 @@ function getCurrentHourInTimezone(timezone: string): number {
   }
 }
 
-function daysUntil(expiryDate: Date): number {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
+function daysUntil(expiryDate: Date, timezone: string = 'UTC'): number {
+  // Get "today" in the user's timezone.
+  const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
+  nowInTz.setHours(0, 0, 0, 0);
   const expiry = new Date(expiryDate);
   expiry.setHours(0, 0, 0, 0);
-  const diffMs = expiry.getTime() - now.getTime();
+  const diffMs = expiry.getTime() - nowInTz.getTime();
   return Math.round(diffMs / (24 * 60 * 60 * 1000));
 }
 
@@ -185,7 +186,7 @@ async function runExpiryCheck() {
       for (const item of items) {
         if (!item.expiryDate) continue;
 
-        const daysLeft = daysUntil(item.expiryDate);
+        const daysLeft = daysUntil(item.expiryDate, timezone);
         const alertType = getAlertType(daysLeft);
 
         if (!alertType) continue;

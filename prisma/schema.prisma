@@ -135,6 +135,7 @@ model ShoppingItem {
   sectionOrder  Int      @default(0) // Custom ordering of sections
   isChecked     Boolean  @default(false)
   recipeId      String?  // If this item was added from a recipe
+  nonGrocery    Boolean  @default(false) // If true, skip adding to pantry at confirmBasket
 
   createdAt     DateTime @default(now())
 

@@ -8,6 +8,7 @@ import { useSettings } from '@/lib/settings';
 import { useStore } from '@/lib/store';
 import { usePushNotifications } from '@/hooks/use-push-notifications';
 import { toast } from 'sonner';
+import { SearchableMultiSelect } from './searchable-multi-select';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', label: 'English', flag: '🇬🇧' },
@@ -19,9 +20,27 @@ const SUPPORTED_LANGUAGES = [
   { code: 'it', label: 'Italiano', flag: '🇮🇹' },
   { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
   { code: 'pt', label: 'Português', flag: '🇵🇹' },
+  { code: 'nl', label: 'Nederlands', flag: '🇳🇱' },
+  { code: 'ru', label: 'Русский', flag: '🇷🇺' },
+  { code: 'pl', label: 'Polski', flag: '🇵🇱' },
   { code: 'tr', label: 'Türkçe', flag: '🇹🇷' },
-  { code: 'vi', label: 'Tiếng Việt', flag: '🇻🇳' },
+  { code: 'ar', label: 'العربية', flag: '🇸🇦' },
+  { code: 'hi', label: 'हिन्दी', flag: '🇮🇳' },
   { code: 'th', label: 'ไทย', flag: '🇹🇭' },
+  { code: 'vi', label: 'Tiếng Việt', flag: '🇻🇳' },
+  { code: 'id', label: 'Bahasa Indonesia', flag: '🇮🇩' },
+  { code: 'ms', label: 'Bahasa Melayu', flag: '🇲🇾' },
+  { code: 'fil', label: 'Filipino', flag: '🇵🇭' },
+  { code: 'sv', label: 'Svenska', flag: '🇸🇪' },
+  { code: 'no', label: 'Norsk', flag: '🇳🇴' },
+  { code: 'da', label: 'Dansk', flag: '🇩🇰' },
+  { code: 'fi', label: 'Suomi', flag: '🇫🇮' },
+  { code: 'cs', label: 'Čeština', flag: '🇨🇿' },
+  { code: 'el', label: 'Ελληνικά', flag: '🇬🇷' },
+  { code: 'he', label: 'עברית', flag: '🇮🇱' },
+  { code: 'ro', label: 'Română', flag: '🇷🇴' },
+  { code: 'uk', label: 'Українська', flag: '🇺🇦' },
+  { code: 'hu', label: 'Magyar', flag: '🇭🇺' },
 ];
 
 interface SettingsModalProps {
@@ -162,57 +181,47 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           <div className="space-y-2">
             <label className="text-sm font-medium">Languages</label>
             <p className="text-xs text-muted-foreground">
-              Languages you speak. Recipes in these languages will keep their original text. Recipes in other languages will be translated to your default language.
+              Languages you speak. Recipes in these languages will keep their original text. AI recipes are generated in your default language.
             </p>
-            <div className="space-y-2">
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Languages you speak:</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {SUPPORTED_LANGUAGES.map((lang) => {
-                    const selected = languages.includes(lang.code);
-                    return (
-                      <button
-                        key={lang.code}
-                        onClick={() => {
-                          const next = selected
-                            ? languages.filter((l) => l !== lang.code)
-                            : [...languages, lang.code];
-                          if (next.length === 0) return; // Keep at least one
-                          setSetting('languages', next);
-                          // If removing the default language, switch to the first remaining.
-                          if (selected && defaultLanguage === lang.code && next.length > 0) {
-                            setSetting('defaultLanguage', next[0]);
-                          }
-                        }}
-                        className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                          selected
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'bg-background text-muted-foreground border-border hover:bg-muted'
-                        }`}
-                      >
-                        {lang.flag} {lang.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Default language for AI recipes:</p>
-                <select
-                  value={defaultLanguage}
-                  onChange={(e) => setSetting('defaultLanguage', e.target.value)}
-                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  {languages.map((code) => {
-                    const lang = SUPPORTED_LANGUAGES.find((l) => l.code === code);
-                    return (
-                      <option key={code} value={code}>
-                        {lang?.flag} {lang?.label || code}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
+            <SearchableMultiSelect
+              options={SUPPORTED_LANGUAGES.map((l) => `${l.flag} ${l.label}`)}
+              selected={new Set(languages.map((code) => {
+                const lang = SUPPORTED_LANGUAGES.find((l) => l.code === code);
+                return lang ? `${lang.flag} ${lang.label}` : code;
+              }))}
+              onChange={(selected) => {
+                // Convert back to codes.
+                const codes = Array.from(selected).map((label) => {
+                  const lang = SUPPORTED_LANGUAGES.find((l) => `${l.flag} ${l.label}` === label);
+                  return lang?.code || label;
+                }).filter(Boolean);
+                if (codes.length === 0) return;
+                setSetting('languages', codes);
+                if (!codes.includes(defaultLanguage)) {
+                  setSetting('defaultLanguage', codes[0]);
+                }
+              }}
+              placeholder="Select languages you speak..."
+              searchPlaceholder="Search languages..."
+              label="Languages you speak"
+              maxDisplay={200}
+            />
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">Default language for AI recipes:</p>
+              <select
+                value={defaultLanguage}
+                onChange={(e) => setSetting('defaultLanguage', e.target.value)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {languages.map((code) => {
+                  const lang = SUPPORTED_LANGUAGES.find((l) => l.code === code);
+                  return (
+                    <option key={code} value={code}>
+                      {lang?.flag} {lang?.label || code}
+                    </option>
+                  );
+                })}
+              </select>
             </div>
           </div>
 

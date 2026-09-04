@@ -194,6 +194,22 @@ export function ShoppingListView() {
     );
   }
 
+  // Toggle non-grocery flag on a shopping list item.
+  async function toggleNonGrocery(item: ShoppingItem) {
+    const newValue = !item.nonGrocery;
+    // Optimistic update.
+    setShoppingLists(lists.map((l) => l.id === activeListId ? {
+      ...l,
+      items: l.items.map((i) => i.id === item.id ? { ...i, nonGrocery: newValue } : i),
+    } : l));
+
+    await fetch(`/api/shopping-items/${item.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ nonGrocery: newValue }),
+    });
+  }
+
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
     if (!newItemName.trim() || !activeListId || adding) return;
@@ -259,7 +275,7 @@ export function ShoppingListView() {
 
   // Tap item → add to shopping basket.
   function addToBasket(item: ShoppingItem) {
-    setBasket([...basket, { name: item.name, genericName: item.genericName || undefined, quantity: item.quantity || undefined }]);
+    setBasket([...basket, { name: item.name, genericName: item.genericName || undefined, quantity: item.quantity || undefined, nonGrocery: item.nonGrocery }]);
     // Mark as checked on the list.
     if (!item.isChecked) toggleItem(item);
     toast.success(`${item.name} added to basket.`);
@@ -680,6 +696,7 @@ export function ShoppingListView() {
                     onAddToBasket={addToBasket}
                     onDeleteItem={deleteItem}
                     onToggleRecurring={toggleRecurring}
+                    onToggleNonGrocery={toggleNonGrocery}
                     isRecurring={isRecurring}
                   />
                 ))}
@@ -744,53 +761,37 @@ export function ShoppingListView() {
                   </div>
                   {/* Edit fields when tapped */}
                   {editingBasketItem === i && (
-                    <div className="space-y-1.5">
-                      <div className="flex flex-col sm:flex-row gap-1.5">
-                        <Input
-                          placeholder="Qty (e.g. 500g)"
-                          value={item.quantity || ''}
-                          onChange={(e) => {
-                            const newBasket = [...basket];
-                            newBasket[i] = { ...item, quantity: e.target.value };
-                            setBasket(newBasket);
-                          }}
-                          className="h-7 text-xs flex-1 min-w-0"
-                        />
-                        <Input
-                          placeholder="Category"
-                          value={item.category || ''}
-                          onChange={(e) => {
-                            const newBasket = [...basket];
-                            newBasket[i] = { ...item, category: e.target.value };
-                            setBasket(newBasket);
-                          }}
-                          className="h-7 text-xs flex-1 min-w-0"
-                        />
-                        <Input
-                          type="date"
-                          value={item.expiryDate || ''}
-                          onChange={(e) => {
-                            const newBasket = [...basket];
-                            newBasket[i] = { ...item, expiryDate: e.target.value };
-                            setBasket(newBasket);
-                          }}
-                          className="h-7 text-xs w-full sm:w-auto shrink-0"
-                        />
-                      </div>
-                      {/* Non-grocery toggle */}
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={!!item.nonGrocery}
-                          onCheckedChange={(checked) => {
-                            const newBasket = [...basket];
-                            newBasket[i] = { ...item, nonGrocery: !!checked };
-                            setBasket(newBasket);
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground">
-                          Non-grocery item (don&apos;t add to pantry — just check off)
-                        </span>
-                      </label>
+                    <div className="flex flex-col sm:flex-row gap-1.5">
+                      <Input
+                        placeholder="Qty (e.g. 500g)"
+                        value={item.quantity || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, quantity: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs flex-1 min-w-0"
+                      />
+                      <Input
+                        placeholder="Category"
+                        value={item.category || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, category: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs flex-1 min-w-0"
+                      />
+                      <Input
+                        type="date"
+                        value={item.expiryDate || ''}
+                        onChange={(e) => {
+                          const newBasket = [...basket];
+                          newBasket[i] = { ...item, expiryDate: e.target.value };
+                          setBasket(newBasket);
+                        }}
+                        className="h-7 text-xs w-full sm:w-auto shrink-0"
+                      />
                     </div>
                   )}
                 </div>
@@ -813,6 +814,7 @@ interface SortableSectionProps {
   onAddToBasket: (item: ShoppingItem) => void;
   onDeleteItem: (id: string) => void;
   onToggleRecurring: (item: ShoppingItem) => void;
+  onToggleNonGrocery: (item: ShoppingItem) => void;
   isRecurring: (item: ShoppingItem) => boolean;
 }
 
@@ -825,6 +827,7 @@ function SortableSection({
   onAddToBasket,
   onDeleteItem,
   onToggleRecurring,
+  onToggleNonGrocery,
   isRecurring,
 }: SortableSectionProps) {
   const {
@@ -884,10 +887,23 @@ function SortableSection({
               />
               <button
                 onClick={() => onAddToBasket(item)}
-                className={`flex-1 text-left text-sm ${item.isChecked ? 'line-through text-muted-foreground' : ''}`}
+                className={`flex-1 text-left text-sm flex items-center gap-2 ${item.isChecked ? 'line-through text-muted-foreground' : ''}`}
               >
                 {item.name}
-                {item.quantity && <span className="text-muted-foreground ml-2">{item.quantity}</span>}
+                {item.nonGrocery && (
+                  <Badge variant="outline" className="text-xs text-muted-foreground shrink-0">
+                    Non-grocery
+                  </Badge>
+                )}
+                {item.quantity && <span className="text-muted-foreground">{item.quantity}</span>}
+              </button>
+              {/* Non-grocery toggle */}
+              <button
+                onClick={() => onToggleNonGrocery(item)}
+                className={`p-1 ${item.nonGrocery ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                title={item.nonGrocery ? 'Non-grocery — click to make grocery' : 'Mark as non-grocery (skip pantry)'}
+              >
+                <ShoppingBasket className="h-3.5 w-3.5" />
               </button>
               <button onClick={() => onDeleteItem(item.id)} className="text-muted-foreground hover:text-destructive p-1">
                 <Trash2 className="h-3.5 w-3.5" />

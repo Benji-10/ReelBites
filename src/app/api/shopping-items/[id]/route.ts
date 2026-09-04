@@ -37,7 +37,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Not found.' }, { status: 404 });
     }
 
-    const allowed = ['name', 'genericName', 'quantity', 'section', 'sectionOrder', 'isChecked', 'recipeId'];
+    const allowed = ['name', 'genericName', 'quantity', 'section', 'sectionOrder', 'isChecked', 'recipeId', 'nonGrocery'];
     const data: Record<string, unknown> = {};
     for (const f of allowed) {
       if (f in body) data[f] = body[f];

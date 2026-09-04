@@ -48,6 +48,7 @@ export interface CachedShoppingItem {
   sectionOrder: number;
   isChecked: boolean;
   recipeId: string | null;
+  nonGrocery: boolean;
 }
 
 export interface CachedShoppingList {
