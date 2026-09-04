@@ -9,6 +9,21 @@ import { useStore } from '@/lib/store';
 import { usePushNotifications } from '@/hooks/use-push-notifications';
 import { toast } from 'sonner';
 
+const SUPPORTED_LANGUAGES = [
+  { code: 'en', label: 'English', flag: '🇬🇧' },
+  { code: 'ja', label: '日本語', flag: '🇯🇵' },
+  { code: 'zh', label: '中文', flag: '🇨🇳' },
+  { code: 'ko', label: '한국어', flag: '🇰🇷' },
+  { code: 'es', label: 'Español', flag: '🇪🇸' },
+  { code: 'fr', label: 'Français', flag: '🇫🇷' },
+  { code: 'it', label: 'Italiano', flag: '🇮🇹' },
+  { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
+  { code: 'pt', label: 'Português', flag: '🇵🇹' },
+  { code: 'tr', label: 'Türkçe', flag: '🇹🇷' },
+  { code: 'vi', label: 'Tiếng Việt', flag: '🇻🇳' },
+  { code: 'th', label: 'ไทย', flag: '🇹🇭' },
+];
+
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -17,7 +32,8 @@ interface SettingsModalProps {
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const {
     smallLiquid, largeLiquid, weight, dry, temperature,
-    defaultServings, inventoryDeduction, setSetting, setAllMetric, setAllImperial, loadFromStorage,
+    defaultServings, inventoryDeduction, languages, defaultLanguage,
+    setSetting, setAllMetric, setAllImperial, loadFromStorage,
   } = useSettings();
   const { authToken } = useStore();
   const push = usePushNotifications(authToken);
@@ -140,6 +156,64 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               {inventoryDeduction === 'confirm' && 'Shows a review screen before deducting. You can edit amounts (e.g. if you used more or finished an item).'}
               {inventoryDeduction === 'none' && 'No deduction prompts. For users who don\'t track pantry quantities.'}
             </p>
+          </div>
+
+          {/* Language Settings */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Languages</label>
+            <p className="text-xs text-muted-foreground">
+              Languages you speak. Recipes in these languages will keep their original text. Recipes in other languages will be translated to your default language.
+            </p>
+            <div className="space-y-2">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Languages you speak:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {SUPPORTED_LANGUAGES.map((lang) => {
+                    const selected = languages.includes(lang.code);
+                    return (
+                      <button
+                        key={lang.code}
+                        onClick={() => {
+                          const next = selected
+                            ? languages.filter((l) => l !== lang.code)
+                            : [...languages, lang.code];
+                          if (next.length === 0) return; // Keep at least one
+                          setSetting('languages', next);
+                          // If removing the default language, switch to the first remaining.
+                          if (selected && defaultLanguage === lang.code && next.length > 0) {
+                            setSetting('defaultLanguage', next[0]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                          selected
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'bg-background text-muted-foreground border-border hover:bg-muted'
+                        }`}
+                      >
+                        {lang.flag} {lang.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Default language for AI recipes:</p>
+                <select
+                  value={defaultLanguage}
+                  onChange={(e) => setSetting('defaultLanguage', e.target.value)}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  {languages.map((code) => {
+                    const lang = SUPPORTED_LANGUAGES.find((l) => l.code === code);
+                    return (
+                      <option key={code} value={code}>
+                        {lang?.flag} {lang?.label || code}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            </div>
           </div>
 
           {/* Push Notifications */}

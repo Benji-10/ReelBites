@@ -75,6 +75,14 @@ Examples of cooking-aware decisions:
 - Avocado oil spray and avocado oil are the SAME ingredient for cooking. Form (spray vs liquid) is SOFT.
 - Low carb wraps and regular wraps ARE interchangeable in cooking. Diet is SOFT.
 - Olive oil and avocado oil are NOT interchangeable (different flavor, different smoke point). Different canonical names.
+- Panko and regular bread crumbs are INTERCHANGEABLE in cooking — panko is just a form of bread crumbs. So panko → canonical_name: "bread crumb", ancestors: [], attributes: {form: "panko"} (SOFT).
+- If a specific subtype is interchangeable with the generic type, make the generic the canonical_name and use a SOFT attribute for the subtype.
+
+CONSISTENCY RULE — CRITICAL:
+- The same ingredient MUST always get the same canonical_name, regardless of how it was worded.
+- "bread crumbs", "bread crumb", "panko bread crumbs" → all should have canonical_name: "bread crumb"
+- "sesame seeds", "sesame seed" → all should have canonical_name: "sesame seed" (pick singular as canonical)
+- Use SINGULAR form for canonical_name: "onion" not "onions", "tomato" not "tomatoes"
 
 ## Core principle
 
@@ -581,13 +589,53 @@ export function matchIngredient(
     return { matched: false, warnings: [] };
   }
 
-  // 1. Concept match: is recipe's canonical_name in pantry's concept path?
-  const pantryConcepts = [pantry.canonical_name, ...pantry.ancestors];
-  if (!pantryConcepts.includes(recipe.canonical_name)) {
-    return { matched: false, warnings: [] };
+  // 0. EXACT canonical_name match — if both sides have the same canonical_name,
+  //    it's a match regardless of ancestors. This handles cases where the AI
+  //    produces inconsistent ancestors (e.g. "bread crumb" with ancestor
+  //    "bread crumbs" vs a pantry item with "bread crumbs" and no ancestors).
+  //    Also handles singular/plural mismatches on the canonical_name itself.
+  if (recipe.canonical_name === pantry.canonical_name) {
+    // Still check hard attributes.
+    return checkAttributes(recipe, pantry);
   }
 
-  // 2. Collect all attribute keys from both sides.
+  // 1. Concept match: is recipe's canonical_name in pantry's concept path?
+  //    This is the directional check — a specific pantry item can satisfy a
+  //    generic recipe need (e.g. pantry has "udon", recipe needs "noodles").
+  const pantryConcepts = [pantry.canonical_name, ...pantry.ancestors];
+  if (!pantryConcepts.includes(recipe.canonical_name)) {
+    // 1b. Check the reverse direction: is the pantry's canonical_name in the
+    //     recipe's concept path? This handles cases where the pantry has a
+    //     generic item (e.g. "bread crumbs") and the recipe has a specific
+    //     item (e.g. "panko" with ancestor "bread crumbs").
+    //     Wait — this would break directionality. Let's NOT do this.
+    //     Instead, let's check if the recipe's ANCESTORS include the pantry's
+    //     canonical_name. This means: "I need panko, and I have bread crumbs"
+    //     → panko's ancestor is bread crumbs → the pantry item IS the ancestor
+    //     → this IS a match (generic satisfies specific via ancestor path).
+    const recipeConcepts = [recipe.canonical_name, ...recipe.ancestors];
+    if (!recipeConcepts.includes(pantry.canonical_name)) {
+      return { matched: false, warnings: [] };
+    }
+    // The pantry's canonical_name is in the recipe's ancestor path.
+    // This means the pantry item IS the (or a) parent type of what the recipe needs.
+    // e.g. recipe needs "panko" (ancestors: ["bread crumb"]), pantry has "bread crumb".
+    // The pantry item satisfies the recipe because it's the parent type.
+    // Still check hard attributes.
+    return checkAttributes(recipe, pantry);
+  }
+
+  // 2. Check attributes.
+  return checkAttributes(recipe, pantry);
+}
+
+/**
+ * Check hard/soft attributes after concept matching succeeds.
+ */
+function checkAttributes(
+  recipe: CanonicalIngredient,
+  pantry: CanonicalIngredient,
+): MatchResult {
   const allKeys = new Set([
     ...Object.keys(recipe.attributes),
     ...Object.keys(pantry.attributes),

@@ -32,6 +32,9 @@ export interface UserSettings {
   defaultServings: number;
   // Inventory deduction after cooking
   inventoryDeduction: InventoryDeduction;
+  // Language preferences
+  languages: string[]; // Languages the user speaks (e.g. ["en", "ja"])
+  defaultLanguage: string; // Language to generate recipes in (e.g. "en")
 }
 
 interface SettingsStore extends UserSettings {
@@ -53,6 +56,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   temperature: 'metric',
   defaultServings: 4,
   inventoryDeduction: 'confirm',
+  languages: ['en'],
+  defaultLanguage: 'en',
 };
 
 const STORAGE_KEY = 'realbites-settings';
@@ -171,6 +176,8 @@ export const useSettings = create<SettingsStore>((set, get) => ({
         temperature: get().temperature,
         defaultServings: get().defaultServings,
         inventoryDeduction: get().inventoryDeduction,
+        languages: get().languages,
+        defaultLanguage: get().defaultLanguage,
       };
       await fetch('/api/settings', {
         method: 'PUT',

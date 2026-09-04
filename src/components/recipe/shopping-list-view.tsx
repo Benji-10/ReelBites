@@ -38,6 +38,7 @@ interface BasketItem {
   genericName?: string;
   category?: string;
   expiryDate?: string;
+  nonGrocery?: boolean; // If true, skip adding to pantry at confirmBasket
 }
 
 interface RecurringItem {
@@ -389,16 +390,31 @@ export function ShoppingListView() {
   }
 
   // Confirm basket → move all items to pantry + remove from shopping list.
+  // Non-grocery items are NOT added to pantry but ARE removed from the shopping list.
   async function confirmBasket() {
     if (basket.length === 0) return;
     setAdding(true);
-    toast.info(`Adding ${basket.length} items to pantry...`);
+    const groceryCount = basket.filter((i) => !i.nonGrocery).length;
+    toast.info(`Adding ${groceryCount} item${groceryCount === 1 ? '' : 's'} to pantry...`);
 
     try {
       // Track which shopping list items to remove.
       const itemsToRemove: ShoppingItem[] = [];
 
       for (const item of basket) {
+        // Non-grocery items: skip pantry add, but still remove from shopping list.
+        if (item.nonGrocery) {
+          if (activeList && item.genericName) {
+            const matched = activeList.items.filter((si) => {
+              const siCanonical = si.genericName || '';
+              return siCanonical === item.genericName ||
+                si.name.toLowerCase() === item.name.toLowerCase();
+            });
+            itemsToRemove.push(...matched);
+          }
+          continue;
+        }
+
         // If the basket item doesn't have a genericName (e.g. manually added),
         // canonicalize + enrich it now using /api/pantry/enrich.
         let category = item.category || '';
@@ -468,7 +484,13 @@ export function ShoppingListView() {
         }));
       }
 
-      toast.success(`${basket.length} items added to pantry!${itemsToRemove.length > 0 ? ` ${itemsToRemove.length} items removed from shopping list.` : ''}`);
+      const nonGroceryCount = basket.filter((i) => i.nonGrocery).length;
+      const addedCount = groceryCount;
+      toast.success(
+        `${addedCount} item${addedCount === 1 ? '' : 's'} added to pantry!` +
+        (nonGroceryCount > 0 ? ` ${nonGroceryCount} non-grocery item${nonGroceryCount === 1 ? '' : 's'} skipped.` : '') +
+        (itemsToRemove.length > 0 ? ` ${itemsToRemove.length} removed from list.` : ''),
+      );
       setBasket([]);
 
       // Refresh the pantry cache so the new items show up immediately.
@@ -691,7 +713,7 @@ export function ShoppingListView() {
                 <Button variant="ghost" size="sm" onClick={() => setBasket([])} className="text-xs">Clear</Button>
                 <Button size="sm" onClick={confirmBasket} disabled={adding} className="gap-1.5">
                   {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Package className="h-3.5 w-3.5" />}
-                  Add to Pantry
+                  Done Shopping
                 </Button>
               </div>
             </div>
@@ -702,11 +724,16 @@ export function ShoppingListView() {
                   <div className="flex items-center justify-between gap-2">
                     <button
                       onClick={() => setEditingBasketItem(editingBasketItem === i ? null : i)}
-                      className="flex-1 text-left text-sm font-medium truncate"
+                      className="flex-1 text-left text-sm font-medium truncate flex items-center gap-2"
                     >
                       {item.name}
+                      {item.nonGrocery && (
+                        <Badge variant="outline" className="text-xs text-muted-foreground shrink-0">
+                          Non-grocery
+                        </Badge>
+                      )}
                       {(item.quantity || item.category || item.expiryDate) && (
-                        <span className="text-xs text-muted-foreground ml-2">
+                        <span className="text-xs text-muted-foreground">
                           {[item.quantity, item.category, item.expiryDate].filter(Boolean).join(' · ')}
                         </span>
                       )}
@@ -717,37 +744,53 @@ export function ShoppingListView() {
                   </div>
                   {/* Edit fields when tapped */}
                   {editingBasketItem === i && (
-                    <div className="flex flex-col sm:flex-row gap-1.5">
-                      <Input
-                        placeholder="Qty (e.g. 500g)"
-                        value={item.quantity || ''}
-                        onChange={(e) => {
-                          const newBasket = [...basket];
-                          newBasket[i] = { ...item, quantity: e.target.value };
-                          setBasket(newBasket);
-                        }}
-                        className="h-7 text-xs flex-1 min-w-0"
-                      />
-                      <Input
-                        placeholder="Category"
-                        value={item.category || ''}
-                        onChange={(e) => {
-                          const newBasket = [...basket];
-                          newBasket[i] = { ...item, category: e.target.value };
-                          setBasket(newBasket);
-                        }}
-                        className="h-7 text-xs flex-1 min-w-0"
-                      />
-                      <Input
-                        type="date"
-                        value={item.expiryDate || ''}
-                        onChange={(e) => {
-                          const newBasket = [...basket];
-                          newBasket[i] = { ...item, expiryDate: e.target.value };
-                          setBasket(newBasket);
-                        }}
-                        className="h-7 text-xs w-full sm:w-auto shrink-0"
-                      />
+                    <div className="space-y-1.5">
+                      <div className="flex flex-col sm:flex-row gap-1.5">
+                        <Input
+                          placeholder="Qty (e.g. 500g)"
+                          value={item.quantity || ''}
+                          onChange={(e) => {
+                            const newBasket = [...basket];
+                            newBasket[i] = { ...item, quantity: e.target.value };
+                            setBasket(newBasket);
+                          }}
+                          className="h-7 text-xs flex-1 min-w-0"
+                        />
+                        <Input
+                          placeholder="Category"
+                          value={item.category || ''}
+                          onChange={(e) => {
+                            const newBasket = [...basket];
+                            newBasket[i] = { ...item, category: e.target.value };
+                            setBasket(newBasket);
+                          }}
+                          className="h-7 text-xs flex-1 min-w-0"
+                        />
+                        <Input
+                          type="date"
+                          value={item.expiryDate || ''}
+                          onChange={(e) => {
+                            const newBasket = [...basket];
+                            newBasket[i] = { ...item, expiryDate: e.target.value };
+                            setBasket(newBasket);
+                          }}
+                          className="h-7 text-xs w-full sm:w-auto shrink-0"
+                        />
+                      </div>
+                      {/* Non-grocery toggle */}
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox
+                          checked={!!item.nonGrocery}
+                          onCheckedChange={(checked) => {
+                            const newBasket = [...basket];
+                            newBasket[i] = { ...item, nonGrocery: !!checked };
+                            setBasket(newBasket);
+                          }}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          Non-grocery item (don&apos;t add to pantry — just check off)
+                        </span>
+                      </label>
                     </div>
                   )}
                 </div>

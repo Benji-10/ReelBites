@@ -207,9 +207,16 @@ export function RecipePantryIntegration({ recipe }: RecipePantryIntegrationProps
     : recipe.ingredients || [];
 
   const ingredientStatus = ingredients.map((ing, idx) => {
-    const ingNameLower = ing.name.toLowerCase().trim();
-    const isStaple = PANTRY_STAPLES.some(
-      (s) => ingNameLower === s || ingNameLower.startsWith(s + ' '),
+    // Use the CANONICAL name for staple exclusion, not the display name.
+    // This ensures "water" in any language still gets excluded if its
+    // canonical_name is "water".
+    // But DON'T exclude if the ingredient has attributes that make it different
+    // (e.g. "sparkling water" has attribute {carbonation: "sparkling"} — that's
+    // a different product from plain water).
+    const canonicalForStaple = ing.canonicalName || ing.name.toLowerCase().trim();
+    const hasAttributes = ing.canonicalAttributes && Object.keys(ing.canonicalAttributes).length > 0;
+    const isStaple = !hasAttributes && PANTRY_STAPLES.some(
+      (s) => canonicalForStaple === s || canonicalForStaple.startsWith(s + ' '),
     );
 
     if (isStaple) {

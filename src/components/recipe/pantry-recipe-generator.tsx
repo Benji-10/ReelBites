@@ -37,7 +37,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   const [hasGenerated, setHasGenerated] = useState(false);
   const [viewingRecipe, setViewingRecipe] = useState<TempRecipe | null>(null);
   const { authToken, addRecipe } = useStore();
-  const { defaultServings } = useSettings();
+  const { defaultServings, defaultLanguage } = useSettings();
 
   async function generate() {
     setLoading(true);
@@ -51,7 +51,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
           'Content-Type': 'application/json',
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ mode, servings: defaultServings }),
+        body: JSON.stringify({ mode, servings: defaultServings, language: defaultLanguage }),
       });
 
       if (!response.ok) {

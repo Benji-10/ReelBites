@@ -47,8 +47,9 @@ function buildPrompt(args: {
   pantryItems: PantryItemInput[];
   mode: 'inspiration' | 'strict';
   servings: number;
+  language: string;
 }): string {
-  const { pantryItems, mode, servings } = args;
+  const { pantryItems, mode, servings, language } = args;
 
   // Group pantry items by category for the AI.
   const byCategory: Record<string, string[]> = {};
@@ -141,6 +142,12 @@ SERVINGS:
 - Each recipe should serve ${servings} people.
 - Scale all ingredient amounts to feed ${servings} servings.
 
+LANGUAGE:
+- Write ALL recipe content (title, description, ingredients, instructions, tags) in ${language}.
+- Use natural, native-sounding ${language} cooking terminology.
+- If ${language} is not English, use ${language} ingredient names where standard (e.g. しょうゆ instead of soy sauce if language is Japanese).
+- Keep amounts and units in a standard format for ${language}.
+
 For EACH recipe, provide:
 - title: A specific, appetizing name (e.g. "Crispy Skin Chicken Thighs with Roasted Root Veg" not "Chicken and Vegetables")
 - description: 1-2 sentences explaining the dish and why it's good
@@ -184,7 +191,7 @@ export async function POST(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
 
-  let body: { mode?: 'inspiration' | 'strict'; servings?: number };
+  let body: { mode?: 'inspiration' | 'strict'; servings?: number; language?: string };
   try {
     body = await request.json();
   } catch {
@@ -193,6 +200,7 @@ export async function POST(request: NextRequest) {
 
   const mode: 'inspiration' | 'strict' = body.mode === 'strict' ? 'strict' : 'inspiration';
   const servings = body.servings && body.servings > 0 && body.servings <= 20 ? body.servings : 4;
+  const language = body.language || 'en';
 
   // Fetch the user's pantry items.
   const pantryItemsRaw = await db.pantryItem.findMany({
@@ -229,7 +237,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings });
+    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language });
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();

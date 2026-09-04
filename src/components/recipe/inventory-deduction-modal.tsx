@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { X, Loader2, Check, Minus, Package, ShoppingCart } from 'lucide-react';
+import { X, Loader2, Check, Minus, Package, ShoppingCart, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -47,12 +46,10 @@ export function InventoryDeductionModal({
   const [deducting, setDeducting] = useState(false);
 
   // Build the deduction rows by matching recipe ingredients to pantry items.
-  // This is a simplified match — we use the canonical name if available.
   const deductionRows = useMemo<DeductionRow[]>(() => {
     if (!recipe.ingredients || recipe.ingredients.length === 0) return [];
 
     return recipe.ingredients.map((ing) => {
-      // Parse the recipe ingredient amount.
       const recipeAmount = parseFloat(ing.amount || '0') * scaleFactor;
       const recipeUnit = ing.unit || '';
 
@@ -112,7 +109,6 @@ export function InventoryDeductionModal({
   async function handleDeduct() {
     setDeducting(true);
 
-    // Build the deductions array — only for matched items.
     const deductions = deductionRows
       .map((row, idx) => {
         if (!row.matched || !row.pantryItemId) return null;
@@ -147,23 +143,14 @@ export function InventoryDeductionModal({
 
       const data = await response.json();
 
-      // Optimistically update the store.
+      // Optimistically update the store — remove finished items.
       for (const deduction of deductions) {
         if (deduction.markAsUsedUp) {
           removePantryItem(deduction.pantryItemId);
-        } else {
-          // The actual updated quantity comes from the server, but we can
-          // approximate by fetching the pantry again.
-          const item = pantryItems.find((p) => p.id === deduction.pantryItemId);
-          if (item) {
-            // We don't know the exact new quantity without parsing, so just
-            // mark as running low if the deduction was significant.
-            updatePantryItem({ ...item, isRunningLow: true });
-          }
         }
       }
 
-      // Re-fetch the pantry to get accurate quantities.
+      // Re-fetch the pantry to get accurate quantities and fill levels.
       await fetchPantry();
 
       toast.success(
@@ -232,19 +219,12 @@ export function InventoryDeductionModal({
                       <div className="h-4 w-4 rounded-full border border-border" />
                     )}
 
-                    {/* Ingredient info */}
+                    {/* Ingredient info — just the pantry item name, not the recipe name */}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium truncate">
-                          {row.recipeIngredient.name}
-                        </span>
-                        {row.matched && (
-                          <Badge variant="secondary" className="text-xs shrink-0">
-                            {row.pantryItemName}
-                          </Badge>
-                        )}
-                      </div>
-                      {row.matched && row.pantryItemQuantity && (
+                      <span className="text-sm font-medium truncate">
+                        {row.matched ? row.pantryItemName : row.recipeIngredient.name}
+                      </span>
+                      {row.matched && row.pantryItemQuantity && !state.markAsUsedUp && (
                         <p className="text-xs text-muted-foreground">
                           In pantry: {row.pantryItemQuantity}
                         </p>
@@ -256,23 +236,31 @@ export function InventoryDeductionModal({
                       )}
                     </div>
 
-                    {/* Amount input */}
+                    {/* Amount stepper — +/- controls, no typing needed */}
                     {row.matched && !state.markAsUsedUp && (
                       <div className="flex items-center gap-1 shrink-0">
-                        <Input
-                          type="number"
-                          value={state.amount}
-                          onChange={(e) => updateRow(idx, { amount: parseFloat(e.target.value) || 0 })}
-                          className="w-16 h-8 text-sm"
-                          step="0.25"
-                          min="0"
-                        />
-                        <Input
-                          value={state.unit}
-                          onChange={(e) => updateRow(idx, { unit: e.target.value })}
-                          className="w-16 h-8 text-sm"
-                          placeholder="unit"
-                        />
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => updateRow(idx, { amount: Math.max(0, state.amount - 0.25) })}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span className="font-semibold tabular-nums text-sm w-12 text-center">
+                          {state.amount}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => updateRow(idx, { amount: state.amount + 0.25 })}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <span className="text-xs text-muted-foreground w-12 text-center">
+                          {state.unit}
+                        </span>
                       </div>
                     )}
 
