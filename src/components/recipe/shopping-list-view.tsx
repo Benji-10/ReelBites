@@ -70,12 +70,25 @@ export function ShoppingListView() {
   const [showNewList, setShowNewList] = useState(false);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [basket, setBasket] = useState<BasketItem[]>([]);
+  const [basket, setBasket] = useState<BasketItem[]>(() => {
+    // Load basket from localStorage on init — survives session refresh.
+    try {
+      const saved = localStorage.getItem('realbites-basket');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [recurringItems, setRecurringItems] = useState<RecurringItem[]>([]);
   const [editingBasketItem, setEditingBasketItem] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
+
+  // Persist basket to localStorage whenever it changes.
+  useEffect(() => {
+    try {
+      localStorage.setItem('realbites-basket', JSON.stringify(basket));
+    } catch {}
+  }, [basket]);
 
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
@@ -508,6 +521,7 @@ export function ShoppingListView() {
         (itemsToRemove.length > 0 ? ` ${itemsToRemove.length} removed from list.` : ''),
       );
       setBasket([]);
+      localStorage.removeItem('realbites-basket');
 
       // Refresh the pantry cache so the new items show up immediately.
       fetchPantry();

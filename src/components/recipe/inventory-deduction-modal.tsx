@@ -199,7 +199,7 @@ export function InventoryDeductionModal({
         </div>
 
         {/* Ingredient list */}
-        <div className="space-y-2 max-h-[50vh] overflow-y-auto custom-scrollbar">
+        <div className="space-y-2 max-h-[55vh] overflow-y-auto custom-scrollbar">
           {deductionRows.map((row, idx) => {
             const state = getRowState(idx);
             return (
@@ -207,76 +207,77 @@ export function InventoryDeductionModal({
                 key={idx}
                 className={!row.matched ? 'opacity-50' : ''}
               >
-                <CardContent className="py-3">
-                  <div className="flex items-center gap-3">
+                <CardContent className="py-2.5 px-3">
+                  <div className="flex items-center gap-2">
                     {/* Checkbox / status */}
                     {row.matched ? (
                       <Checkbox
                         checked={!state.markAsUsedUp}
                         onCheckedChange={(checked) => updateRow(idx, { markAsUsedUp: !checked })}
+                        className="shrink-0"
                       />
                     ) : (
-                      <div className="h-4 w-4 rounded-full border border-border" />
+                      <div className="h-4 w-4 rounded-full border border-border shrink-0" />
                     )}
 
-                    {/* Ingredient info — just the pantry item name, not the recipe name */}
+                    {/* Name + pantry info */}
                     <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium truncate">
+                      <span className="text-sm font-medium truncate block">
                         {row.matched ? row.pantryItemName : row.recipeIngredient.name}
                       </span>
                       {row.matched && row.pantryItemQuantity && !state.markAsUsedUp && (
-                        <p className="text-xs text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           In pantry: {row.pantryItemQuantity}
-                        </p>
+                        </span>
                       )}
                       {!row.matched && (
-                        <p className="text-xs text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           Not in your pantry
-                        </p>
+                        </span>
                       )}
                     </div>
 
-                    {/* Amount stepper — +/- controls, no typing needed */}
-                    {row.matched && !state.markAsUsedUp && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => updateRow(idx, { amount: Math.max(0, state.amount - 0.25) })}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <span className="font-semibold tabular-nums text-sm w-12 text-center">
-                          {state.amount}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => updateRow(idx, { amount: state.amount + 0.25 })}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                        <span className="text-xs text-muted-foreground w-12 text-center">
-                          {state.unit}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* "Used up" button */}
+                    {/* Finish button (compact) */}
                     {row.matched && (
                       <Button
                         size="sm"
                         variant={state.markAsUsedUp ? 'default' : 'outline'}
-                        className="h-8 text-xs gap-1 shrink-0"
+                        className="h-7 text-xs gap-1 shrink-0 px-2"
                         onClick={() => updateRow(idx, { markAsUsedUp: !state.markAsUsedUp })}
                       >
                         <Minus className="h-3 w-3" />
-                        {state.markAsUsedUp ? 'Finished' : 'Finish'}
+                        {state.markAsUsedUp ? 'Done' : 'Finish'}
                       </Button>
                     )}
                   </div>
+
+                  {/* Amount stepper — below the name on mobile, beside on desktop */}
+                  {row.matched && !state.markAsUsedUp && (
+                    <div className="flex items-center gap-1 mt-2 pl-6">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => updateRow(idx, { amount: Math.max(0, state.amount - 0.25) })}
+                      >
+                        <Minus className="h-3 w-3" />
+                      </Button>
+                      <span className="font-semibold tabular-nums text-sm w-10 text-center">
+                        {state.amount}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => updateRow(idx, { amount: state.amount + 0.25 })}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                      <span className="text-xs text-muted-foreground ml-1">
+                        {state.unit}
+                      </span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             );

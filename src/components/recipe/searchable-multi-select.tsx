@@ -87,7 +87,12 @@ export function SearchableMultiSelect({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="h-8 pl-7 text-sm"
+                style={{ fontSize: '16px' }}
                 autoFocus
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
               />
               {search && (
                 <button

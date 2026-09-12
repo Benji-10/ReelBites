@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, RefreshCw, Wand2, Plus, ChefHat, Clock, Users, X, ListOrdered, Maximize2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -39,6 +40,8 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   const { authToken, addRecipe } = useStore();
   const { defaultServings, defaultLanguage } = useSettings();
 
+  const [preferredIngredients, setPreferredIngredients] = useState('');
+
   async function generate() {
     setLoading(true);
     setRecipes([]);
@@ -51,7 +54,12 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
           'Content-Type': 'application/json',
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ mode, servings: defaultServings, language: defaultLanguage }),
+        body: JSON.stringify({
+          mode,
+          servings: defaultServings,
+          language: defaultLanguage,
+          preferredIngredients: preferredIngredients.trim() || undefined,
+        }),
       });
 
       if (!response.ok) {
@@ -197,6 +205,24 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                   Use ONLY what&apos;s in your pantry. No additional ingredients.
                 </p>
               </button>
+            </div>
+
+            {/* Preferred ingredients input */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">
+                Want to cook with something specific? (optional)
+              </label>
+              <Input
+                placeholder="e.g. beef, mushrooms, tofu..."
+                value={preferredIngredients}
+                onChange={(e) => setPreferredIngredients(e.target.value)}
+                className="h-9 text-sm"
+                style={{ fontSize: '16px' }}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+              />
             </div>
 
             <div className="flex items-center gap-2">
@@ -551,6 +577,35 @@ interface CookingModeInlineProps {
 
 function CookingModeInline({ instructions, title, onClose }: CookingModeInlineProps) {
   const [currentStep, setCurrentStep] = useState(0);
+
+  // Keep screen on during cooking mode (wake lock).
+  useEffect(() => {
+    let wakeLock: { release: () => Promise<void> } | null = null;
+
+    async function requestWakeLock() {
+      try {
+        // @ts-expect-error - wakeLock is not in the standard TS types yet.
+        wakeLock = await navigator.wakeLock?.request('screen');
+      } catch {
+        // Wake lock not supported or denied — not critical.
+      }
+    }
+
+    requestWakeLock();
+
+    // Re-acquire wake lock when the page becomes visible again.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !wakeLock) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      wakeLock?.release?.();
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[60] bg-background flex flex-col">

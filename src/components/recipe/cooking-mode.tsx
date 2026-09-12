@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EvidenceTooltip } from './evidence-tooltip';
@@ -17,6 +17,32 @@ interface CookingModeProps {
 
 export function CookingMode({ instructions, ingredients, title, onClose, scaleAmount }: CookingModeProps) {
   const [currentStep, setCurrentStep] = useState(0);
+
+  // Keep screen on during cooking mode (wake lock).
+  useEffect(() => {
+    let wakeLock: { release: () => Promise<void> } | null = null;
+
+    async function requestWakeLock() {
+      try {
+        // @ts-expect-error - wakeLock is not in standard TS types yet.
+        wakeLock = await navigator.wakeLock?.request('screen');
+      } catch {}
+    }
+
+    requestWakeLock();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !wakeLock) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      wakeLock?.release?.();
+    };
+  }, []);
 
   const step = instructions[currentStep];
   const isLastStep = currentStep === instructions.length - 1;

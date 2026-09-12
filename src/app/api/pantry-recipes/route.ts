@@ -48,8 +48,9 @@ function buildPrompt(args: {
   mode: 'inspiration' | 'strict';
   servings: number;
   language: string;
+  preferredIngredients?: string;
 }): string {
-  const { pantryItems, mode, servings, language } = args;
+  const { pantryItems, mode, servings, language, preferredIngredients } = args;
 
   // Group pantry items by category for the AI.
   const byCategory: Record<string, string[]> = {};
@@ -113,7 +114,7 @@ ${modeInstructions}
 
 AVAILABLE PANTRY ITEMS:
 ${pantryList}
-
+${preferredIngredients ? `\nPREFERRED INGREDIENTS (the user specifically wants to cook with these):\n${preferredIngredients}\n- At least 2 of the 5 recipes should feature these ingredients prominently.\n- The other 3 can use other pantry items.` : ''}
 Create 5 DISTINCT, high-quality recipes. Each recipe must be:
 1. A REAL, recognized dish — not a hodgepodge or invented combination. Think "what would I find in a cookbook?"
 2. Thoughtfully constructed with proper technique (searing, braising, roasting, emulsifying, etc.).
@@ -191,7 +192,7 @@ export async function POST(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
 
-  let body: { mode?: 'inspiration' | 'strict'; servings?: number; language?: string };
+  let body: { mode?: 'inspiration' | 'strict'; servings?: number; language?: string; preferredIngredients?: string };
   try {
     body = await request.json();
   } catch {
@@ -201,6 +202,7 @@ export async function POST(request: NextRequest) {
   const mode: 'inspiration' | 'strict' = body.mode === 'strict' ? 'strict' : 'inspiration';
   const servings = body.servings && body.servings > 0 && body.servings <= 20 ? body.servings : 4;
   const language = body.language || 'en';
+  const preferredIngredients = body.preferredIngredients?.trim() || undefined;
 
   // Fetch the user's pantry items.
   const pantryItemsRaw = await db.pantryItem.findMany({
@@ -237,7 +239,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language });
+    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language, preferredIngredients });
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
