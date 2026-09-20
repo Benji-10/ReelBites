@@ -363,7 +363,7 @@ export function RecipeBox() {
       )}
 
       {filteredRecipes.length === 0 ? (
-        <Card className="p-12 text-center">
+        <Card className="p-6 sm:p-12 text-center">
           <div className="space-y-4">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent">
               <BookOpen className="h-8 w-8 text-muted-foreground" />

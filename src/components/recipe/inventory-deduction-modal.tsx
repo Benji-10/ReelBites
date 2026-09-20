@@ -199,7 +199,7 @@ export function InventoryDeductionModal({
         </div>
 
         {/* Ingredient list */}
-        <div className="space-y-2 max-h-[55vh] overflow-y-auto custom-scrollbar">
+        <div className="space-y-2">
           {deductionRows.map((row, idx) => {
             const state = getRowState(idx);
             return (

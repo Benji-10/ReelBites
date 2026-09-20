@@ -41,6 +41,11 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   const { defaultServings, defaultLanguage } = useSettings();
 
   const [preferredIngredients, setPreferredIngredients] = useState('');
+  const [flavourProfile, setFlavourProfile] = useState<{
+    validatedPairings: number;
+    suggestedAdditions: string[];
+    coreIngredients: string[];
+  } | null>(null);
 
   async function generate() {
     setLoading(true);
@@ -69,8 +74,9 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
 
       const data = await response.json();
       setRecipes(data.recipes || []);
+      setFlavourProfile(data.flavourProfile || null);
       setHasGenerated(true);
-      toast.success(`Generated ${data.recipes?.length || 0} recipes!`);
+      toast.success(`Generated ${data.recipes?.length || 0} recipes!${data.flavourProfile ? ' (flavour-optimized)' : ''}`);
     } catch (err) {
       toast.error('Could not generate recipes: ' + (err as Error).message);
     } finally {
@@ -262,6 +268,35 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                 <p className="text-sm text-muted-foreground">
                   {recipes.length} recipes generated. Click a recipe to view the full details.
                 </p>
+
+                {/* Flavour profile card */}
+                {flavourProfile && (
+                  <Card className="bg-primary/5 border-primary/20">
+                    <CardContent className="py-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">Flavour-Optimized</span>
+                        <Badge variant="secondary" className="text-xs">
+                          {flavourProfile.validatedPairings} validated pairings
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Recipes generated using Epicure's flavour embedding model (4.14M recipe corpus).
+                        Core ingredients: {flavourProfile.coreIngredients.join(', ')}
+                      </p>
+                      {flavourProfile.suggestedAdditions.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs text-muted-foreground">Suggested pairings:</span>
+                          {flavourProfile.suggestedAdditions.slice(0, 6).map((s) => (
+                            <Badge key={s} variant="outline" className="text-xs">
+                              {s}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
                 {recipes.map((recipe, idx) => {
                   const servings = recipe.metadata?.find((m) => m.key.toLowerCase() === 'servings');
                   const totalTime = recipe.metadata?.find((m) => m.key.toLowerCase().includes('totaltime') || m.key.toLowerCase().includes('total time'));
@@ -638,7 +673,7 @@ function CookingModeInline({ instructions, title, onClose }: CookingModeInlinePr
             >
               ← Previous
             </Button>
-            <div className="flex gap-1">
+            <div className="flex gap-1 overflow-x-auto custom-scrollbar max-w-[40vw] py-2">
               {instructions.map((_, i) => (
                 <button
                   key={i}

@@ -73,7 +73,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
       <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
         <CardContent className="pt-6 space-y-5">
           <div className="flex items-center justify-between">

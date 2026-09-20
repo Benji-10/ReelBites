@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Search, Clock, AlertTriangle, Filter } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Search, Clock, AlertTriangle, Filter, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,6 +35,7 @@ import { useStore } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import { FridgeScanner } from './fridge-scanner';
 
 interface PantryItem {
   id: string;
@@ -88,6 +89,7 @@ export function PantryView() {
   const { authToken, pantryItems, fetchPantry, addPantryItem, updatePantryItem, removePantryItem } = useStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [showFridgeScanner, setShowFridgeScanner] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [expiryFilter, setExpiryFilter] = useState<'all' | 'expiring' | 'expired' | 'noexpiry'>('all');
   const [showLowOnly, setShowLowOnly] = useState(false);
@@ -378,6 +380,10 @@ export function PantryView() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button onClick={() => setShowFridgeScanner(true)} variant="outline" size="sm" className="gap-2">
+            <Camera className="h-4 w-4" />
+            <span className="hidden sm:inline">Scan Fridge</span>
+          </Button>
           <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
             {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
           </Button>
@@ -644,7 +650,7 @@ export function PantryView() {
       <Sheet open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setEditingField(null); } }}>
         <SheetContent className="overflow-y-auto">
           {selectedItem && (
-            <div className="px-6 pb-6">
+            <div className="px-4 sm:px-6 pb-6 pt-[env(safe-area-inset-top)]">
               <SheetHeader className="px-0">
                 <SheetTitle>{selectedItem.name}</SheetTitle>
                 <SheetDescription>
@@ -848,6 +854,9 @@ export function PantryView() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Fridge Scanner */}
+      <FridgeScanner open={showFridgeScanner} onOpenChange={setShowFridgeScanner} />
     </div>
   );
 }

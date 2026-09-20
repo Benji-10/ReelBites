@@ -733,7 +733,7 @@ export function ShoppingListView() {
 
       {/* Shopping basket — floating at bottom with editable items */}
       {basket.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-md shadow-lg">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-md shadow-lg pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-2xl mx-auto px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">

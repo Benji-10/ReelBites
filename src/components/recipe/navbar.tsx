@@ -41,7 +41,7 @@ export function Navbar({ user, isReady, onLogin, onSignup, onLogout, onOpenSetti
   ] as const;
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-40 w-full border-b border-border/40 bg-background/80 backdrop-blur-md">
       <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between gap-2">
           {/* Logo */}

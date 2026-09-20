@@ -62,9 +62,9 @@ export function CookingMode({ instructions, ingredients, title, onClose, scaleAm
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col">
+    <div className="fixed inset-0 z-[70] bg-background flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
+      <div className="flex items-center justify-between p-4 border-b border-border pt-[max(1rem,env(safe-area-inset-top))]">
         <div className="flex-1 min-w-0">
           <p className="text-xs text-muted-foreground uppercase tracking-wide">Cooking Mode</p>
           <h2 className="font-semibold truncate">{title}</h2>
@@ -125,7 +125,7 @@ export function CookingMode({ instructions, ingredients, title, onClose, scaleAm
       </div>
 
       {/* Controls */}
-      <div className="border-t border-border p-4 space-y-3">
+      <div className="border-t border-border p-4 space-y-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="flex items-center justify-between gap-3">
           <Button
             variant="outline"

@@ -19,6 +19,7 @@ import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { canonicalizeNames, CURRENT_CANONICAL_VERSION } from '@/lib/canonicalize';
+import { buildFlavourProfile, formatFlavourProfileForPrompt } from '@/lib/epicure';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -49,8 +50,9 @@ function buildPrompt(args: {
   servings: number;
   language: string;
   preferredIngredients?: string;
+  flavourProfileText?: string | null;
 }): string {
-  const { pantryItems, mode, servings, language, preferredIngredients } = args;
+  const { pantryItems, mode, servings, language, preferredIngredients, flavourProfileText } = args;
 
   // Group pantry items by category for the AI.
   const byCategory: Record<string, string[]> = {};
@@ -115,6 +117,7 @@ ${modeInstructions}
 AVAILABLE PANTRY ITEMS:
 ${pantryList}
 ${preferredIngredients ? `\nPREFERRED INGREDIENTS (the user specifically wants to cook with these):\n${preferredIngredients}\n- At least 2 of the 5 recipes should feature these ingredients prominently.\n- The other 3 can use other pantry items.` : ''}
+${flavourProfileText ? `\n${flavourProfileText}\n` : ''}
 Create 5 DISTINCT, high-quality recipes. Each recipe must be:
 1. A REAL, recognized dish — not a hodgepodge or invented combination. Think "what would I find in a cookbook?"
 2. Thoughtfully constructed with proper technique (searing, braising, roasting, emulsifying, etc.).
@@ -228,6 +231,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'GEMINI_API_KEY is not set.' }, { status: 500 });
   }
 
+  // ===== EPICURE FLAVOUR ANALYSIS =====
+  // Query the Epicure ingredient embedding model for scientifically validated
+  // pairings before generating recipes. This makes the recipes more cohesive.
+  // If Epicure is unavailable, we fall back to Gemini-only generation.
+  console.log('[pantry-recipes] Querying Epicure for flavour pairings...');
+  const pantryIngredientNames = pantryItemsRaw.map((i) => i.genericName || i.name);
+  const flavourProfile = await buildFlavourProfile(pantryIngredientNames, preferredIngredients);
+  const flavourProfileText = formatFlavourProfileForPrompt(flavourProfile);
+
+  if (flavourProfileText) {
+    console.log('[pantry-recipes] Epicure flavour analysis complete — including in prompt.');
+  } else {
+    console.log('[pantry-recipes] No Epicure data — proceeding with Gemini-only.');
+  }
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -239,7 +257,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language, preferredIngredients });
+    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language, preferredIngredients, flavourProfileText });
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
@@ -417,6 +435,11 @@ export async function POST(request: NextRequest) {
       recipes: tempRecipes,
       mode,
       pantryItemCount: pantryItemsRaw.length,
+      flavourProfile: flavourProfile ? {
+        validatedPairings: flavourProfile.validatedPairings.length,
+        suggestedAdditions: flavourProfile.suggestedPairings,
+        coreIngredients: flavourProfile.coreIngredients,
+      } : null,
     });
   } catch (err) {
     console.error('[pantry-recipes] Failed:', err);

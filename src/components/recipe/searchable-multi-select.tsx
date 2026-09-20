@@ -77,7 +77,7 @@ export function SearchableMultiSelect({
             <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-80 p-0" align="start">
+        <PopoverContent className="w-[min(20rem,calc(100vw-1.5rem))] p-0" align="start">
           {/* Search input inside the dropdown */}
           <div className="p-2 border-b sticky top-0 bg-popover z-10">
             <div className="relative">
