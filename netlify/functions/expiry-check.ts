@@ -259,12 +259,10 @@ async function runExpiryCheck() {
   return { duration: `${duration}s`, stats };
 }
 
-// Schedule: runs every 15 minutes.
+// Schedule: runs EVERY HOUR.
 // For each user, it checks if the current hour in their timezone matches
 // their notificationHour (default 9). This ensures alerts come at 9am local time.
-// Running every 15 min instead of hourly reduces the chance of missing the
-// exact hour due to function cold starts.
-const handler = schedule('*/15 * * * *', async () => {
+const handler = schedule('0 * * * *', async () => {
   const result = await runExpiryCheck();
 
   return {

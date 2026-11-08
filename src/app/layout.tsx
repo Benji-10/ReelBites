@@ -1,21 +1,9 @@
-import type { Metadata, Viewport } from "next";
+import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { ThemeProvider, themeInitScript } from "@/components/theme-provider";
-
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
-  viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafaf9" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
-};
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -143,7 +131,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <Toaster />
-          <SonnerToaster position="top-center" richColors />
+          <SonnerToaster position="top-right" richColors />
         </ThemeProvider>
       </body>
     </html>

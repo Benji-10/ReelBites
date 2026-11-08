@@ -7,11 +7,6 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  serverExternalPackages: [
-    'fluent-ffmpeg',
-    'ffmpeg-static',
-    '@ffmpeg-installer/ffmpeg',
-  ],
 };
 
 export default nextConfig;

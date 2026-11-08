@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Sparkles, Loader2, RefreshCw, Wand2, Plus, ChefHat, Clock, Users, X, ListOrdered, Maximize2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -40,13 +39,6 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
   const { authToken, addRecipe } = useStore();
   const { defaultServings, defaultLanguage } = useSettings();
 
-  const [preferredIngredients, setPreferredIngredients] = useState('');
-  const [flavourProfile, setFlavourProfile] = useState<{
-    validatedPairings: number;
-    suggestedAdditions: string[];
-    coreIngredients: string[];
-  } | null>(null);
-
   async function generate() {
     setLoading(true);
     setRecipes([]);
@@ -59,12 +51,7 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
           'Content-Type': 'application/json',
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({
-          mode,
-          servings: defaultServings,
-          language: defaultLanguage,
-          preferredIngredients: preferredIngredients.trim() || undefined,
-        }),
+        body: JSON.stringify({ mode, servings: defaultServings, language: defaultLanguage }),
       });
 
       if (!response.ok) {
@@ -74,9 +61,8 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
 
       const data = await response.json();
       setRecipes(data.recipes || []);
-      setFlavourProfile(data.flavourProfile || null);
       setHasGenerated(true);
-      toast.success(`Generated ${data.recipes?.length || 0} recipes!${data.flavourProfile ? ' (flavour-optimized)' : ''}`);
+      toast.success(`Generated ${data.recipes?.length || 0} recipes!`);
     } catch (err) {
       toast.error('Could not generate recipes: ' + (err as Error).message);
     } finally {
@@ -213,24 +199,6 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
               </button>
             </div>
 
-            {/* Preferred ingredients input */}
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">
-                Want to cook with something specific? (optional)
-              </label>
-              <Input
-                placeholder="e.g. beef, mushrooms, tofu..."
-                value={preferredIngredients}
-                onChange={(e) => setPreferredIngredients(e.target.value)}
-                className="h-9 text-sm"
-                style={{ fontSize: '16px' }}
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-              />
-            </div>
-
             <div className="flex items-center gap-2">
               <Button onClick={generate} disabled={loading} className="gap-2 flex-1">
                 {loading ? (
@@ -268,35 +236,6 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                 <p className="text-sm text-muted-foreground">
                   {recipes.length} recipes generated. Click a recipe to view the full details.
                 </p>
-
-                {/* Flavour profile card */}
-                {flavourProfile && (
-                  <Card className="bg-primary/5 border-primary/20">
-                    <CardContent className="py-3 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="h-4 w-4 text-primary" />
-                        <span className="text-sm font-medium">Flavour-Optimized</span>
-                        <Badge variant="secondary" className="text-xs">
-                          {flavourProfile.validatedPairings} validated pairings
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Recipes generated using Epicure's flavour embedding model (4.14M recipe corpus).
-                        Core ingredients: {flavourProfile.coreIngredients.join(', ')}
-                      </p>
-                      {flavourProfile.suggestedAdditions.length > 0 && (
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-xs text-muted-foreground">Suggested pairings:</span>
-                          {flavourProfile.suggestedAdditions.slice(0, 6).map((s) => (
-                            <Badge key={s} variant="outline" className="text-xs">
-                              {s}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
                 {recipes.map((recipe, idx) => {
                   const servings = recipe.metadata?.find((m) => m.key.toLowerCase() === 'servings');
                   const totalTime = recipe.metadata?.find((m) => m.key.toLowerCase().includes('totaltime') || m.key.toLowerCase().includes('total time'));
@@ -613,35 +552,6 @@ interface CookingModeInlineProps {
 function CookingModeInline({ instructions, title, onClose }: CookingModeInlineProps) {
   const [currentStep, setCurrentStep] = useState(0);
 
-  // Keep screen on during cooking mode (wake lock).
-  useEffect(() => {
-    let wakeLock: { release: () => Promise<void> } | null = null;
-
-    async function requestWakeLock() {
-      try {
-        // @ts-expect-error - wakeLock is not in the standard TS types yet.
-        wakeLock = await navigator.wakeLock?.request('screen');
-      } catch {
-        // Wake lock not supported or denied — not critical.
-      }
-    }
-
-    requestWakeLock();
-
-    // Re-acquire wake lock when the page becomes visible again.
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !wakeLock) {
-        requestWakeLock();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      wakeLock?.release?.();
-    };
-  }, []);
-
   return (
     <div className="fixed inset-0 z-[60] bg-background flex flex-col">
       <div className="flex items-center justify-between p-4 border-b">
@@ -673,7 +583,7 @@ function CookingModeInline({ instructions, title, onClose }: CookingModeInlinePr
             >
               ← Previous
             </Button>
-            <div className="flex gap-1 overflow-x-auto custom-scrollbar max-w-[40vw] py-2">
+            <div className="flex gap-1">
               {instructions.map((_, i) => (
                 <button
                   key={i}

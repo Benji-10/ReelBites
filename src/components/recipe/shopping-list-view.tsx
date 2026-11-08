@@ -70,25 +70,12 @@ export function ShoppingListView() {
   const [showNewList, setShowNewList] = useState(false);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [basket, setBasket] = useState<BasketItem[]>(() => {
-    // Load basket from localStorage on init — survives session refresh.
-    try {
-      const saved = localStorage.getItem('realbites-basket');
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  const [basket, setBasket] = useState<BasketItem[]>([]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [recurringItems, setRecurringItems] = useState<RecurringItem[]>([]);
   const [editingBasketItem, setEditingBasketItem] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
-
-  // Persist basket to localStorage whenever it changes.
-  useEffect(() => {
-    try {
-      localStorage.setItem('realbites-basket', JSON.stringify(basket));
-    } catch {}
-  }, [basket]);
 
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
@@ -521,7 +508,6 @@ export function ShoppingListView() {
         (itemsToRemove.length > 0 ? ` ${itemsToRemove.length} removed from list.` : ''),
       );
       setBasket([]);
-      localStorage.removeItem('realbites-basket');
 
       // Refresh the pantry cache so the new items show up immediately.
       fetchPantry();
@@ -733,7 +719,7 @@ export function ShoppingListView() {
 
       {/* Shopping basket — floating at bottom with editable items */}
       {basket.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-md shadow-lg pb-[env(safe-area-inset-bottom)]">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-md shadow-lg">
           <div className="max-w-2xl mx-auto px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">

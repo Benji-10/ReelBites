@@ -1124,7 +1124,7 @@ function ShareButton({ recipeId, recipeTitle }: ShareButtonProps) {
           <Share2 className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[min(20rem,calc(100vw-1.5rem))]" align="end">
+      <PopoverContent className="w-80" align="end">
         <div className="space-y-3">
           <div>
             <p className="text-sm font-medium">Share recipe</p>
