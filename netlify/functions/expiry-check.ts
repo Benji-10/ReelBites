@@ -1,14 +1,16 @@
 /**
  * Netlify Scheduled Function: Expiry Check
  *
- * Runs EVERY HOUR to check if it's notification time (9am) in each user's
+ * Runs EVERY 15 MINUTES to check if it's notification time (9am) in each user's
  * local timezone. When it is, checks all their pantry items for upcoming
  * expiries and sends push notifications.
  *
  * Alerts are sent at: 7 days, 3 days, 1 day, and day-of expiry.
  * The NotifiedItem table prevents duplicate notifications.
  *
- * The function is scheduled hourly with schedule('0 * * * *').
+ * The function is scheduled every 15 minutes (cron: 0,15,30,45 of each hour).
+ * Running every 15 min instead of hourly reduces the chance of missing
+ * the exact hour due to function cold starts.
  * For each subscription, it checks: is the current hour (in the user's
  * timezone) equal to their notificationHour? If yes, send alerts.
  * This ensures each user gets alerts at 9am THEIR local time.
@@ -259,10 +261,12 @@ async function runExpiryCheck() {
   return { duration: `${duration}s`, stats };
 }
 
-// Schedule: runs EVERY HOUR.
+// Schedule: runs EVERY 15 MINUTES.
 // For each user, it checks if the current hour in their timezone matches
 // their notificationHour (default 9). This ensures alerts come at 9am local time.
-const handler = schedule('0 * * * *', async () => {
+// Running every 15 min instead of hourly reduces the chance of missing the
+// exact hour due to function cold starts.
+const handler = schedule('*/15 * * * *', async () => {
   const result = await runExpiryCheck();
 
   return {

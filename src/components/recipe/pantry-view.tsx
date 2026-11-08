@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Search, Clock, AlertTriangle, Filter } from 'lucide-react';
+import { Plus, Trash2, X, Package, ScanLine, Loader2, ChevronRight, Percent, Check, Pencil, UtensilsCrossed, Search, Clock, AlertTriangle, Filter, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,6 +35,7 @@ import { useStore } from '@/lib/store';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import { FridgeScanner } from './fridge-scanner';
 
 interface PantryItem {
   id: string;
@@ -97,6 +98,7 @@ export function PantryView() {
   const [newCategory, setNewCategory] = useState('');
   const [filter, setFilter] = useState<string>('all');
   const [scanning, setScanning] = useState(false);
+  const [showFridgeScanner, setShowFridgeScanner] = useState(false);
   const [barcodeValue, setBarcodeValue] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
   const [selectedItem, setSelectedItem] = useState<PantryItem | null>(null);
@@ -183,14 +185,32 @@ export function PantryView() {
 
   function stopScan() {
     setScanning(false);
-    if (scannerRef.current) {
-      scannerRef.current.stop();
-      scannerRef.current = null;
+    try {
+      if (scannerRef.current) {
+        scannerRef.current.stop();
+        scannerRef.current = null;
+      }
+    } catch {}
+    // Also stop the camera MediaStream and detach it from the video element —
+    // otherwise the camera light stays on.
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach((t) => t.stop());
+      videoRef.current.srcObject = null;
     }
   }
 
   useEffect(() => {
-    return () => { if (scannerRef.current) scannerRef.current.stop(); };
+    return () => {
+      try {
+        if (scannerRef.current) scannerRef.current.stop();
+      } catch {}
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((t) => t.stop());
+        videoRef.current.srcObject = null;
+      }
+    };
   }, []);
 
   async function lookupProduct(barcode: string) {
@@ -378,6 +398,15 @@ export function PantryView() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={() => setShowFridgeScanner(true)}
+            variant="outline"
+            size="sm"
+            className="gap-2"
+          >
+            <Camera className="h-4 w-4" />
+            <span className="hidden sm:inline">Scan Fridge</span>
+          </Button>
           <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
             {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
           </Button>
@@ -644,7 +673,7 @@ export function PantryView() {
       <Sheet open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setEditingField(null); } }}>
         <SheetContent className="overflow-y-auto">
           {selectedItem && (
-            <div className="px-6 pb-6">
+            <div className="px-4 sm:px-6 pb-6 pt-[env(safe-area-inset-top)]">
               <SheetHeader className="px-0">
                 <SheetTitle>{selectedItem.name}</SheetTitle>
                 <SheetDescription>
@@ -848,6 +877,9 @@ export function PantryView() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Fridge scanner dialog (multi-phase: capture → analyze → review → add) */}
+      <FridgeScanner open={showFridgeScanner} onOpenChange={setShowFridgeScanner} />
     </div>
   );
 }

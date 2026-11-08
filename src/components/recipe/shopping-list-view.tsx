@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, X, ShoppingCart, Loader2, ScanLine, ShoppingBasket, Check, ChevronDown, ChevronRight, Package, GripVertical, RotateCw } from 'lucide-react';
+import { Plus, Trash2, X, ShoppingCart, Loader2, ScanLine, ShoppingBasket, Check, ChevronDown, ChevronRight, Package, GripVertical, RotateCw, Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -70,12 +70,21 @@ export function ShoppingListView() {
   const [showNewList, setShowNewList] = useState(false);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [basket, setBasket] = useState<BasketItem[]>([]);
+  const [scanningReceipt, setScanningReceipt] = useState(false);
+  // Initialize the basket from localStorage — the basket should survive page
+  // reloads (you don't want to lose a half-finished shop).
+  const [basket, setBasket] = useState<BasketItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('realbites-basket');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [recurringItems, setRecurringItems] = useState<RecurringItem[]>([]);
   const [editingBasketItem, setEditingBasketItem] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<IScannerControls | null>(null);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
 
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
@@ -100,6 +109,11 @@ export function ShoppingListView() {
     }
     loadData();
   }, [authToken, shoppingLists.length, fetchShoppingLists]);
+
+  // Persist the basket to localStorage whenever it changes.
+  useEffect(() => {
+    try { localStorage.setItem('realbites-basket', JSON.stringify(basket)); } catch {}
+  }, [basket]);
 
   // Set active list when lists load.
   useEffect(() => {
@@ -326,14 +340,32 @@ export function ShoppingListView() {
 
   function stopScan() {
     setScanning(false);
-    if (scannerRef.current) {
-      scannerRef.current.stop();
-      scannerRef.current = null;
+    try {
+      if (scannerRef.current) {
+        scannerRef.current.stop();
+        scannerRef.current = null;
+      }
+    } catch {}
+    // Also stop the camera MediaStream and detach it from the video element —
+    // otherwise the camera light stays on.
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach((t) => t.stop());
+      videoRef.current.srcObject = null;
     }
   }
 
   useEffect(() => {
-    return () => { if (scannerRef.current) scannerRef.current.stop(); };
+    return () => {
+      try {
+        if (scannerRef.current) scannerRef.current.stop();
+      } catch {}
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((t) => t.stop());
+        videoRef.current.srcObject = null;
+      }
+    };
   }, []);
 
   // When a barcode is scanned while shopping, look up the product on OpenFoodFacts,
@@ -402,6 +434,58 @@ export function ShoppingListView() {
       // Fallback — add to basket without enrichment.
       setBasket([...basket, { name: productName, barcode, quantity: knownQuantity || undefined }]);
       toast.info('Could not process scan. Added to basket without enrichment.');
+    }
+  }
+
+  // Scan a receipt photo → extract grocery items → add to basket.
+  // Items are NOT canonicalized here (they go to the basket, not the pantry).
+  async function handleReceiptSelected(file: File) {
+    setScanningReceipt(true);
+
+    try {
+      // Read the file as a data URL.
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Could not read file.'));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/shopping-lists/scan-receipt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Receipt scan failed.' }));
+        throw new Error(errorData.error || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const receiptItems: BasketItem[] = (data.items || []).map((item: {
+        name: string;
+        quantity?: string | null;
+        unit?: string | null;
+      }) => ({
+        name: item.name,
+        quantity: [item.quantity, item.unit].filter(Boolean).join(' ') || undefined,
+      }));
+
+      if (receiptItems.length === 0) {
+        toast.info('No grocery items found on the receipt. Try a clearer photo.');
+        return;
+      }
+
+      setBasket([...basket, ...receiptItems]);
+      toast.success(`Added ${receiptItems.length} item${receiptItems.length === 1 ? '' : 's'} from receipt to basket.`);
+    } catch (err) {
+      toast.error('Could not scan receipt: ' + (err as Error).message);
+    } finally {
+      setScanningReceipt(false);
     }
   }
 
@@ -613,6 +697,28 @@ export function ShoppingListView() {
           <p className="text-sm text-muted-foreground mt-1">{lists.length} list{lists.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Hidden file input for receipt photos */}
+          <input
+            type="file"
+            accept="image/*"
+            ref={receiptInputRef}
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleReceiptSelected(f);
+              e.target.value = '';
+            }}
+          />
+          <Button
+            onClick={() => receiptInputRef.current?.click()}
+            disabled={scanningReceipt}
+            variant="outline"
+            size="sm"
+            className="gap-2"
+          >
+            {scanningReceipt ? <Loader2 className="h-4 w-4 animate-spin" /> : <Receipt className="h-4 w-4" />}
+            <span className="hidden sm:inline">Scan Receipt</span>
+          </Button>
           {activeListId && (
             <Button onClick={startBarcodeScan} variant="outline" size="icon" className="h-9 w-9" disabled={scanning} aria-label="Scan barcode">
               {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}

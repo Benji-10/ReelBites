@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EvidenceTooltip } from './evidence-tooltip';
@@ -17,6 +17,38 @@ interface CookingModeProps {
 
 export function CookingMode({ instructions, ingredients, title, onClose, scaleAmount }: CookingModeProps) {
   const [currentStep, setCurrentStep] = useState(0);
+
+  // Wake lock — keep the screen on while cooking. Re-acquire when the page
+  // becomes visible again (e.g. after the user switches apps).
+  useEffect(() => {
+    let wakeLock: { release: () => Promise<void> } | null = null;
+
+    async function requestLock() {
+      try {
+        // navigator.wakeLock is non-standard but typed in newer TS DOM libs.
+        wakeLock = await navigator.wakeLock.request('screen');
+      } catch {
+        // Wake lock not supported or denied — cooking mode still works.
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        requestLock();
+      }
+    }
+
+    requestLock();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    };
+  }, []);
 
   const step = instructions[currentStep];
   const isLastStep = currentStep === instructions.length - 1;
@@ -36,9 +68,9 @@ export function CookingMode({ instructions, ingredients, title, onClose, scaleAm
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
+    <div className="fixed inset-0 z-[70] bg-background flex flex-col">
+      {/* Header — respects the notch / status bar on mobile */}
+      <div className="flex items-center justify-between p-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-border">
         <div className="flex-1 min-w-0">
           <p className="text-xs text-muted-foreground uppercase tracking-wide">Cooking Mode</p>
           <h2 className="font-semibold truncate">{title}</h2>
@@ -98,8 +130,8 @@ export function CookingMode({ instructions, ingredients, title, onClose, scaleAm
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="border-t border-border p-4 space-y-3">
+      {/* Controls — respects the home indicator on mobile */}
+      <div className="border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3">
         <div className="flex items-center justify-between gap-3">
           <Button
             variant="outline"

@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, RefreshCw, Wand2, Plus, ChefHat, Clock, Users, X, ListOrdered, Maximize2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -30,19 +31,62 @@ interface TempRecipe extends SavedRecipe {
   _savedToBox?: boolean;
 }
 
+interface FlavourProfileData {
+  validatedPairings: number;
+  suggestedAdditions: string[];
+  coreIngredients: string[];
+}
+
 export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGeneratorProps) {
   const [mode, setMode] = useState<Mode>('inspiration');
   const [loading, setLoading] = useState(false);
   const [recipes, setRecipes] = useState<TempRecipe[]>([]);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [viewingRecipe, setViewingRecipe] = useState<TempRecipe | null>(null);
+  const [preferredIngredients, setPreferredIngredients] = useState('');
+  const [flavourProfile, setFlavourProfile] = useState<FlavourProfileData | null>(null);
   const { authToken, addRecipe } = useStore();
   const { defaultServings, defaultLanguage } = useSettings();
+
+  // Wake lock — keep the screen on while recipes generate (~30s). Re-acquire
+  // on visibilitychange, release on unmount/close.
+  useEffect(() => {
+    if (!open) return;
+
+    let wakeLock: { release: () => Promise<void> } | null = null;
+
+    async function requestLock() {
+      try {
+        // navigator.wakeLock is non-standard but typed in newer TS DOM libs.
+        wakeLock = await navigator.wakeLock.request('screen');
+      } catch {
+        // Wake lock not supported or denied — fine.
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        requestLock();
+      }
+    }
+
+    requestLock();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    };
+  }, [open]);
 
   async function generate() {
     setLoading(true);
     setRecipes([]);
     setViewingRecipe(null);
+    setFlavourProfile(null);
 
     try {
       const response = await fetch('/api/pantry-recipes', {
@@ -51,7 +95,12 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
           'Content-Type': 'application/json',
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ mode, servings: defaultServings, language: defaultLanguage }),
+        body: JSON.stringify({
+          mode,
+          servings: defaultServings,
+          language: defaultLanguage,
+          preferredIngredients: preferredIngredients.trim() || undefined,
+        }),
       });
 
       if (!response.ok) {
@@ -62,7 +111,11 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
       const data = await response.json();
       setRecipes(data.recipes || []);
       setHasGenerated(true);
-      toast.success(`Generated ${data.recipes?.length || 0} recipes!`);
+      setFlavourProfile(data.flavourProfile || null);
+      toast.success(
+        `Generated ${data.recipes?.length || 0} recipes!` +
+          (data.flavourProfile ? ' (flavour-optimized)' : ''),
+      );
     } catch (err) {
       toast.error('Could not generate recipes: ' + (err as Error).message);
     } finally {
@@ -199,6 +252,25 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
               </button>
             </div>
 
+            {/* Preferred ingredients (optional) */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="preferred-ingredients">
+                Want to cook with something specific? (optional)
+              </label>
+              <Input
+                id="preferred-ingredients"
+                placeholder="e.g. beef, mushrooms, tofu..."
+                value={preferredIngredients}
+                onChange={(e) => setPreferredIngredients(e.target.value)}
+                className="h-9 text-sm"
+                style={{ fontSize: '16px' }}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+              />
+            </div>
+
             <div className="flex items-center gap-2">
               <Button onClick={generate} disabled={loading} className="gap-2 flex-1">
                 {loading ? (
@@ -228,6 +300,39 @@ export function PantryRecipeGenerator({ open, onOpenChange }: PantryRecipeGenera
                   : 'Crafting restaurant-quality recipes from your pantry...'}
                 <p className="text-xs mt-2">This takes ~30 seconds.</p>
               </div>
+            )}
+
+            {/* Flavour Profile card — shown when Epicure data was used */}
+            {!loading && flavourProfile && (
+              <Card className="border-primary/30 bg-primary/5">
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    Flavour-Optimized
+                    <Badge variant="secondary" className="text-xs">
+                      {flavourProfile.validatedPairings} validated pairings
+                    </Badge>
+                  </CardTitle>
+                  <CardDescription className="text-xs leading-relaxed">
+                    Recipes generated using Epicure&apos;s flavour embedding model (4.14M recipe corpus).
+                    {flavourProfile.coreIngredients.length > 0 && (
+                      <> Core ingredients: {flavourProfile.coreIngredients.slice(0, 8).join(', ')}.</>
+                    )}
+                  </CardDescription>
+                </CardHeader>
+                {flavourProfile.suggestedAdditions.length > 0 && (
+                  <CardContent className="pt-0">
+                    <p className="text-xs text-muted-foreground mb-1.5">Suggested pairings:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {flavourProfile.suggestedAdditions.slice(0, 6).map((s) => (
+                        <Badge key={s} variant="outline" className="text-xs font-normal">
+                          {s}
+                        </Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                )}
+              </Card>
             )}
 
             {/* Recipe results list */}

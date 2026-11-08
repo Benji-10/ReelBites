@@ -77,7 +77,7 @@ export function SearchableMultiSelect({
             <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-80 p-0" align="start">
+        <PopoverContent className="w-[min(20rem,calc(100vw-1.5rem))] p-0" align="start">
           {/* Search input inside the dropdown */}
           <div className="p-2 border-b sticky top-0 bg-popover z-10">
             <div className="relative">
@@ -87,6 +87,11 @@ export function SearchableMultiSelect({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="h-8 pl-7 text-sm"
+                style={{ fontSize: '16px' }}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 autoFocus
               />
               {search && (

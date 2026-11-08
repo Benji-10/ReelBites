@@ -19,6 +19,7 @@ import { db } from '@/lib/db';
 import { getUserFromRequest, ensureUserInDb } from '@/lib/auth';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { canonicalizeNames, CURRENT_CANONICAL_VERSION } from '@/lib/canonicalize';
+import { buildFlavourProfile, formatFlavourProfileForPrompt } from '@/lib/epicure';
 import type { RecipeIngredient, RecipeInstruction, RecipeMetadata, RecipeFlag } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -48,8 +49,10 @@ function buildPrompt(args: {
   mode: 'inspiration' | 'strict';
   servings: number;
   language: string;
+  preferredIngredients?: string;
+  flavourProfileText?: string | null;
 }): string {
-  const { pantryItems, mode, servings, language } = args;
+  const { pantryItems, mode, servings, language, preferredIngredients, flavourProfileText } = args;
 
   // Group pantry items by category for the AI.
   const byCategory: Record<string, string[]> = {};
@@ -107,13 +110,27 @@ Do NOT create:
 - Dishes that are just assembling pre-made components
 - Dishes with made-up names that combine unrelated cuisines`;
 
+  const preferredSection = preferredIngredients
+    ? `
+PREFERRED INGREDIENTS:
+- The user wants to cook with: ${preferredIngredients}
+- At least 2 of the 5 recipes should feature these ingredients prominently. The other 3 can use other pantry items.
+`
+    : '';
+
+  const flavourSection = flavourProfileText
+    ? `
+${flavourProfileText}
+`
+    : '';
+
   return `You are a professional chef and recipe developer creating recipes for a home cook.
 
 ${modeInstructions}
 
 AVAILABLE PANTRY ITEMS:
 ${pantryList}
-
+${preferredSection}${flavourSection}
 Create 5 DISTINCT, high-quality recipes. Each recipe must be:
 1. A REAL, recognized dish — not a hodgepodge or invented combination. Think "what would I find in a cookbook?"
 2. Thoughtfully constructed with proper technique (searing, braising, roasting, emulsifying, etc.).
@@ -191,7 +208,12 @@ export async function POST(request: NextRequest) {
   const user = getUserFromRequest(request);
   await ensureUserInDb(user);
 
-  let body: { mode?: 'inspiration' | 'strict'; servings?: number; language?: string };
+  let body: {
+    mode?: 'inspiration' | 'strict';
+    servings?: number;
+    language?: string;
+    preferredIngredients?: string;
+  };
   try {
     body = await request.json();
   } catch {
@@ -201,6 +223,7 @@ export async function POST(request: NextRequest) {
   const mode: 'inspiration' | 'strict' = body.mode === 'strict' ? 'strict' : 'inspiration';
   const servings = body.servings && body.servings > 0 && body.servings <= 20 ? body.servings : 4;
   const language = body.language || 'en';
+  const preferredIngredients = body.preferredIngredients?.trim() || undefined;
 
   // Fetch the user's pantry items.
   const pantryItemsRaw = await db.pantryItem.findMany({
@@ -226,6 +249,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'GEMINI_API_KEY is not set.' }, { status: 500 });
   }
 
+  // Query Epicure for flavour pairings BEFORE building the prompt.
+  // This is best-effort: if Epicure is down we proceed Gemini-only.
+  console.log('[pantry-recipes] Querying Epicure for flavour pairings...');
+  const pantryIngredientNames = pantryItemsRaw.map((i) => i.genericName || i.name);
+  const flavourProfile = await buildFlavourProfile(pantryIngredientNames, preferredIngredients);
+  const flavourProfileText = formatFlavourProfileForPrompt(flavourProfile);
+  if (flavourProfileText) {
+    console.log('[pantry-recipes] Epicure flavour analysis complete — including in prompt.');
+  } else {
+    console.log('[pantry-recipes] No Epicure data — proceeding with Gemini-only.');
+  }
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -237,7 +272,14 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const prompt = buildPrompt({ pantryItems: pantryItemsRaw, mode, servings, language });
+    const prompt = buildPrompt({
+      pantryItems: pantryItemsRaw,
+      mode,
+      servings,
+      language,
+      preferredIngredients,
+      flavourProfileText,
+    });
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
@@ -415,6 +457,13 @@ export async function POST(request: NextRequest) {
       recipes: tempRecipes,
       mode,
       pantryItemCount: pantryItemsRaw.length,
+      flavourProfile: flavourProfile
+        ? {
+            validatedPairings: flavourProfile.validatedPairings.length,
+            suggestedAdditions: flavourProfile.suggestedPairings,
+            coreIngredients: flavourProfile.coreIngredients,
+          }
+        : null,
     });
   } catch (err) {
     console.error('[pantry-recipes] Failed:', err);

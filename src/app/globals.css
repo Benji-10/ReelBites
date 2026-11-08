@@ -265,3 +265,33 @@ button:disabled,
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--primary);
 }
+
+/* ===== Mobile UX fixes ===== */
+
+/* Prevent iOS zoom on input focus — 16px is the minimum font size that
+   prevents Safari from auto-zooming. Applied globally to all inputs,
+   textareas, and selects. */
+@media (max-width: 640px) {
+  input[type="text"], input[type="email"], input[type="number"],
+  input[type="search"], input[type="tel"], input[type="url"],
+  input:not([type]), textarea, select {
+    font-size: 16px !important;
+  }
+}
+
+/* Safe area insets for notched devices (requires viewportFit: 'cover') */
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Prevent text selection on UI elements (buttons, badges) for native app feel */
+button, .badge, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Smoother scrolling on iOS */
+* { -webkit-overflow-scrolling: touch; }
+
+/* Prevent pull-to-refresh on mobile PWA */
+html { overscroll-behavior-y: contain; }

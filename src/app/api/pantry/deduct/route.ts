@@ -170,17 +170,19 @@ export async function POST(request: NextRequest) {
       const newAmount = Math.max(0, currentQty.amount - amountToDeduct);
       const newQty = `${newAmount % 1 === 0 ? newAmount : newAmount.toFixed(2)} ${currentQty.unit}`.trim();
 
-      // Calculate the fill percentage based on the remaining amount.
-      // If the original amount was > 0, fillPercent = (newAmount / originalAmount) * 100.
-      // If we can't calculate (original was 0 or unknown), use a reasonable default.
-      let fillPercent = item.fillPercent;
+      // Calculate the fill percentage PROPORTIONALLY to the current fill level.
+      // The old formula (newAmount / currentQty.amount) reset the baseline to
+      // 100% on every deduction, causing drift. Instead: scale the existing
+      // fillPercent by the fraction remaining in this deduction.
+      let fillPercent = item.fillPercent ?? 100;
       if (currentQty.amount > 0) {
-        fillPercent = Math.round((newAmount / currentQty.amount) * 100);
+        const fractionRemaining = newAmount / currentQty.amount;
+        fillPercent = Math.round(fillPercent * fractionRemaining);
       }
       fillPercent = Math.max(0, Math.min(100, fillPercent));
 
-      // If the new amount is 0 or very close, mark as running low.
-      const isRunningLow = newAmount <= 0 || (currentQty.amount > 0 && fillPercent < 25);
+      // If the new amount is 0 or the fill level dropped below 25%, mark as running low.
+      const isRunningLow = newAmount <= 0 || fillPercent < 25;
 
       await db.pantryItem.update({
         where: { id: item.id },

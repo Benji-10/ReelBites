@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { X, Loader2, Check, Minus, Package, ShoppingCart, Plus } from 'lucide-react';
+import { X, Loader2, Check, Minus, Package, ShoppingCart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -199,7 +199,7 @@ export function InventoryDeductionModal({
         </div>
 
         {/* Ingredient list */}
-        <div className="space-y-2 max-h-[50vh] overflow-y-auto custom-scrollbar">
+        <div className="space-y-2">
           {deductionRows.map((row, idx) => {
             const state = getRowState(idx);
             return (
@@ -207,16 +207,17 @@ export function InventoryDeductionModal({
                 key={idx}
                 className={!row.matched ? 'opacity-50' : ''}
               >
-                <CardContent className="py-3">
-                  <div className="flex items-center gap-3">
+                <CardContent className="py-2.5 px-3">
+                  <div className="flex items-center gap-2">
                     {/* Checkbox / status */}
                     {row.matched ? (
                       <Checkbox
+                        className="shrink-0"
                         checked={!state.markAsUsedUp}
                         onCheckedChange={(checked) => updateRow(idx, { markAsUsedUp: !checked })}
                       />
                     ) : (
-                      <div className="h-4 w-4 rounded-full border border-border" />
+                      <div className="h-4 w-4 rounded-full border border-border shrink-0" />
                     )}
 
                     {/* Ingredient info — just the pantry item name, not the recipe name */}
@@ -225,55 +226,27 @@ export function InventoryDeductionModal({
                         {row.matched ? row.pantryItemName : row.recipeIngredient.name}
                       </span>
                       {row.matched && row.pantryItemQuantity && !state.markAsUsedUp && (
-                        <p className="text-xs text-muted-foreground">
+                        <span className="block text-xs text-muted-foreground">
                           In pantry: {row.pantryItemQuantity}
-                        </p>
+                        </span>
                       )}
                       {!row.matched && (
-                        <p className="text-xs text-muted-foreground">
+                        <span className="block text-xs text-muted-foreground">
                           Not in your pantry
-                        </p>
+                        </span>
                       )}
                     </div>
-
-                    {/* Amount stepper — +/- controls, no typing needed */}
-                    {row.matched && !state.markAsUsedUp && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => updateRow(idx, { amount: Math.max(0, state.amount - 0.25) })}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <span className="font-semibold tabular-nums text-sm w-12 text-center">
-                          {state.amount}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => updateRow(idx, { amount: state.amount + 0.25 })}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                        <span className="text-xs text-muted-foreground w-12 text-center">
-                          {state.unit}
-                        </span>
-                      </div>
-                    )}
 
                     {/* "Used up" button */}
                     {row.matched && (
                       <Button
                         size="sm"
                         variant={state.markAsUsedUp ? 'default' : 'outline'}
-                        className="h-8 text-xs gap-1 shrink-0"
+                        className="h-7 px-2 text-xs gap-1 shrink-0"
                         onClick={() => updateRow(idx, { markAsUsedUp: !state.markAsUsedUp })}
                       >
                         <Minus className="h-3 w-3" />
-                        {state.markAsUsedUp ? 'Finished' : 'Finish'}
+                        {state.markAsUsedUp ? 'Done' : 'Finish'}
                       </Button>
                     )}
                   </div>
