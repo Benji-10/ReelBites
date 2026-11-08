@@ -1,7 +1,7 @@
 /**
  * POST /api/shopping-lists/scan-receipt
  *
- * Takes a receipt photo and uses Gemini 2.5-flash vision to extract grocery
+ * Takes a receipt photo and uses Gemini vision (GEMINI_MODEL env var) to extract grocery
  * items (name, quantity, unit, estimated price).
  *
  * NOTE: items are NOT canonicalized here — receipt items go to the shopping
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
       generationConfig: {
         temperature: 0.1,
         responseMimeType: 'application/json',

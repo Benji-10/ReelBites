@@ -14,7 +14,7 @@ export interface OcrOptions {
   mimeType?: string;
   /** Override the OCR prompt (defaults to a general-purpose OCR prompt). */
   prompt?: string;
-  /** Model to use. Defaults to gemini-2.5-flash (vision-capable). */
+  /** Model to use. Defaults to the GEMINI_MODEL env var (must be vision-capable). */
   model?: string;
 }
 

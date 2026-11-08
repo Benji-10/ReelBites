@@ -1,7 +1,7 @@
 /**
  * POST /api/pantry/scan-fridge
  *
- * Takes a fridge photo and uses Gemini 2.5-flash vision to identify food
+ * Takes a fridge photo and uses Gemini vision (GEMINI_MODEL env var) to identify food
  * items. Each item is canonicalized (canonicalizeAndEnrich) before being
  * returned, so the client can add them directly via /api/pantry POST.
  *
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     // ---- Step 1: Vision — identify food items in the fridge ----------------
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
       generationConfig: {
         temperature: 0.1,
         responseMimeType: 'application/json',

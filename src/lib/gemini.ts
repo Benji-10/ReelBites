@@ -11,8 +11,8 @@
  *     add a flag rather than inventing a value.
  *
  * The model is configurable via GEMINI_MODEL (default: gemini-2.5-flash-lite).
- * The user mentioned "gemini-3.1-flash-lite" — if/when Google ships that name,
- * set GEMINI_MODEL=gemini-3.1-flash-lite and it will just work.
+ * gemini-2.5-flash was shut down on 2026-10-16 — set GEMINI_MODEL to any
+ * current model (e.g. gemini-3.1-flash-lite) to switch every call at once.
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
