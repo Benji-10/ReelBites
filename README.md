@@ -52,9 +52,9 @@ Instagram URL
     └─────────────────┘
 ```
 
-**Architecture: Hybrid (Client-side WASM + Server-side API calls)**
+**Architecture: Hybrid (Client-side WASM + Server-side runtime ffmpeg)**
 
-Heavy media processing (ffmpeg, OCR) runs **client-side** via WebAssembly to stay under Netlify's 250MB function size limit. The server only handles API-key-dependent work.
+Media processing runs client-side via WebAssembly (in-browser) and/or server-side via `/api/extract`. The server's ffmpeg binary is **resolved at runtime** (system PATH, or a static build downloaded to `/tmp` on first use) — no binaries are bundled into the function, keeping it under Netlify's 250MB function size limit.
 
 ```
 Browser (client-side WASM)          Server (Netlify Functions)
@@ -73,7 +73,8 @@ Browser (client-side WASM)          Server (Netlify Functions)
 **Tech Stack:**
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui
 - **Client-side processing**: ffmpeg.wasm (video/audio), Tesseract.js (OCR)
-- **Backend**: Next.js API Routes (deployed as Netlify Functions, ~10MB bundle)
+- **Server-side processing**: ffmpeg (runtime-resolved binary), Groq Whisper, Gemini Vision OCR
+- **Backend**: Next.js API Routes (Netlify Functions; ffmpeg resolved at runtime, not bundled)
 - **Database**: Neon PostgreSQL + Prisma ORM
 - **Auth**: Netlify Identity (GoTrue)
 - **Instagram scraping**: Apify (free tier, server-side)

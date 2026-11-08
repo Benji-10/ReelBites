@@ -1,11 +1,14 @@
 # =============================================================================
 # Netlify Configuration for RealBites
 # =============================================================================
-# Architecture: Hybrid (client-side WASM + server-side API calls)
+# Architecture: Hybrid (client-side WASM + server-side runtime ffmpeg)
 #
-# Heavy media processing (ffmpeg, OCR) runs client-side via WebAssembly to
-# stay under Netlify's 250MB function size limit. The server only handles
-# API-key-dependent work (Apify, Gemini, Whisper, database).
+# Heavy media processing can run client-side via WebAssembly, or server-side
+# with an ffmpeg binary that is resolved at RUNTIME (system PATH, or a static
+# build downloaded to /tmp on first use — see src/lib/video.ts). ffmpeg
+# binaries are deliberately NOT bundled with the function: ffmpeg-static +
+# @ffmpeg-installer together add ~143MB and would exceed Netlify's 250MB
+# function size limit.
 # =============================================================================
 
 [build]
@@ -41,8 +44,9 @@
 # -----------------------------------------------------------------------------
 # Netlify Functions configuration
 # -----------------------------------------------------------------------------
-# The function bundle is now small (~10MB) because ffmpeg and tesseract
-# binaries run client-side via WASM. Only Prisma needs special handling.
+# The function bundle stays small because no ffmpeg/tesseract binaries are
+# bundled (ffmpeg is resolved at runtime; tesseract runs client-side via
+# WASM). Only Prisma needs special handling.
 # -----------------------------------------------------------------------------
 [functions]
   node_bundler = "esbuild"

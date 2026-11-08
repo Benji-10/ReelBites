@@ -92,7 +92,14 @@ export async function transcribeAudioFromBuffer(
 
   // Build multipart/form-data manually (avoids FormData+Blob issues in Lambda).
   const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
-  const filename = mimeType === 'audio/wav' ? 'audio.wav' : 'audio.mp3';
+  // Groq detects the format from the filename extension — MP4 uploads (the
+  // no-ffmpeg fallback in recipe-pipeline) need the right extension too.
+  const filename =
+    mimeType === 'audio/wav'
+      ? 'audio.wav'
+      : mimeType === 'video/mp4'
+        ? 'audio.mp4'
+        : 'audio.mp3';
 
   const parts: Buffer[] = [];
 

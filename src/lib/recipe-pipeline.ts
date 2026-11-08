@@ -21,6 +21,7 @@ import {
   extractAudio,
   extractFrames,
   cleanupFiles,
+  resolveFfmpegPath,
 } from './video';
 import { extractTextFromImage } from './ocr';
 import { transcribeAudioFromBuffer } from './whisper';
@@ -88,6 +89,16 @@ export async function extractRecipeFromVideo(
     if (videoFile) {
       scratchFiles.push(videoFile);
 
+      // Resolve ffmpeg lazily (may download the static binary once per cold
+      // instance — see src/lib/video.ts). Caption-only extractions never get
+      // here, so they never trigger the download.
+      const ffmpegPath = await resolveFfmpegPath();
+      if (!ffmpegPath) {
+        console.warn(
+          '[pipeline] ffmpeg unavailable — falling back to direct video transcription (no frame OCR).',
+        );
+      }
+
       // ---- 2. Metadata -----------------------------------------------------
       onProgress?.('Reading video metadata...');
       const metadata = await getVideoMetadata(videoFile);
@@ -100,33 +111,56 @@ export async function extractRecipeFromVideo(
       // No-audio reels land here quietly: extractAudio returns null and we
       // continue with an empty transcript.
       if (!metadata || metadata.hasAudio) {
-        onProgress?.('Extracting audio...');
-        const audioFile = await extractAudio(videoFile);
-        if (audioFile) {
-          scratchFiles.push(audioFile);
+        if (ffmpegPath) {
+          onProgress?.('Extracting audio...');
+          const audioFile = await extractAudio(videoFile);
+          if (audioFile) {
+            scratchFiles.push(audioFile);
 
-          onProgress?.('Transcribing audio (Whisper)...');
-          const audioBuffer = readFileSafe(audioFile);
-          if (audioBuffer) {
-            try {
-              transcript = await transcribeAudioFromBuffer(audioBuffer, 'audio/mpeg');
-              console.log(`[pipeline] Transcript: ${transcript.length} chars.`);
-            } catch (err) {
-              // Transcription failure is NOT fatal — caption/OCR may suffice.
-              console.warn('[pipeline] Transcription failed:', (err as Error).message);
-              transcript = '';
+            onProgress?.('Transcribing audio (Whisper)...');
+            const audioBuffer = readFileSafe(audioFile);
+            if (audioBuffer) {
+              try {
+                transcript = await transcribeAudioFromBuffer(audioBuffer, 'audio/mpeg');
+                console.log(`[pipeline] Transcript: ${transcript.length} chars.`);
+              } catch (err) {
+                // Transcription failure is NOT fatal — caption/OCR may suffice.
+                console.warn('[pipeline] Transcription failed:', (err as Error).message);
+                transcript = '';
+              }
             }
+          } else {
+            console.log('[pipeline] No audio track — continuing without transcript.');
           }
         } else {
-          console.log('[pipeline] No audio track — continuing without transcript.');
+          // No ffmpeg binary: Groq Whisper accepts MP4 directly (25MB request
+          // limit — short reels fit comfortably). Audio-less MP4s simply fail
+          // transcription and we continue with caption/OCR.
+          onProgress?.('Sending video to Whisper directly (no ffmpeg)...');
+          const videoBuffer = readFileSafe(videoFile);
+          if (videoBuffer && videoBuffer.length <= 24 * 1024 * 1024) {
+            try {
+              transcript = await transcribeAudioFromBuffer(videoBuffer, 'video/mp4');
+              console.log(`[pipeline] Transcript (direct MP4): ${transcript.length} chars.`);
+            } catch (err) {
+              console.warn('[pipeline] Direct video transcription failed:', (err as Error).message);
+              transcript = '';
+            }
+          } else {
+            console.warn('[pipeline] Video too large for direct Whisper upload without ffmpeg.');
+          }
         }
       } else {
         console.log('[pipeline] Video has no audio stream — skipping transcription.');
       }
 
-      // ---- 4. Frames → OCR ----------------------------------------------------
-      onProgress?.(`Extracting frames (every ${interval}s)...`);
-      const frames = await extractFrames(videoFile, interval, frameCap);
+      // ---- 4. Frames → OCR (requires ffmpeg — skipped gracefully without it)
+      if (ffmpegPath) {
+        onProgress?.(`Extracting frames (every ${interval}s)...`);
+      }
+      const frames = ffmpegPath
+        ? await extractFrames(videoFile, interval, frameCap)
+        : [];
       scratchFiles.push(...frames);
 
       if (frames.length > 0) {
